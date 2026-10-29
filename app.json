@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Turzam AI",
+    "slug": "turzam-ai",
+    "scheme": "turzam",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "backgroundColor": "#060914",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#060914"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.turzam.ai"
+    },
+    "android": {
+      "package": "com.turzam.ai",
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#060914"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Turzam AI needs your photos so you can send images to the assistant.",
+          "cameraPermission": "Turzam AI needs the camera so you can take a photo and ask about it."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "icon": "./assets/icon.png",
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

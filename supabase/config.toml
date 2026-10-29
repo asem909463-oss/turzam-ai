@@ -1,0 +1,4 @@
+project_id = "turzam-ai"
+
+[functions.chat]
+verify_jwt = true

@@ -1,0 +1,23 @@
+node_modules/
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+*.log
+.DS_Store
+
+# Secrets - never commit these
+.env
+.env.local
+.env.*.local
+supabase/.env
+supabase/.temp/
+
+# Native build output
+android/
+ios/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
