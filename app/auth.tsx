@@ -1,25 +1,23 @@
 import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
-import Animated, {
-  FadeInDown,
-  useAnimatedStyle,
-  useSharedValue,
-  withSequence,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { Aurora } from '../src/components/Aurora';
-import { Orb } from '../src/components/Orb';
 import { Field } from '../src/components/Field';
 import { GradientButton } from '../src/components/GradientButton';
+import { Logo } from '../src/components/Logo';
+import { Motto } from '../src/components/Motto';
 import { PressableScale } from '../src/components/PressableScale';
 import { useAuth } from '../src/context/AuthContext';
-import { colors, fonts, radius, withAlpha } from '../src/theme';
+import { useStyles, useTheme } from '../src/context/ThemeContext';
+import { fonts, radius, Theme, withAlpha } from '../src/theme';
 
 export default function AuthScreen() {
   const { signIn, signUp } = useAuth();
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
+  const styles = useStyles(make);
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -76,17 +74,17 @@ export default function AuthScreen() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[styles.body, { paddingTop: insets.top + 56, paddingBottom: insets.bottom + 30 }]}
+          contentContainerStyle={[styles.body, { paddingTop: insets.top + 36, paddingBottom: insets.bottom + 30 }]}
         >
-          <Orb size={84} />
+          <Logo size={132} />
           <Animated.Text entering={FadeInDown.delay(120).duration(500)} style={styles.brand}>
-            Turzam
+            Turzam AI
           </Animated.Text>
-          <Animated.Text entering={FadeInDown.delay(220).duration(500)} style={styles.tag}>
-            An assistant that <Text style={styles.tagItalic}>remembers</Text> what matters.
-          </Animated.Text>
+          <Animated.View entering={FadeInDown.delay(240).duration(500)} style={{ marginBottom: 14 }}>
+            <Motto size={24} />
+          </Animated.View>
 
-          <Animated.View entering={FadeInDown.delay(320).duration(500)} style={[styles.card, shakeStyle]}>
+          <Animated.View entering={FadeInDown.delay(340).duration(500)} style={[styles.card, shakeStyle]}>
             <Text style={styles.cardTitle}>{isSignUp ? 'Create your account' : 'Welcome back'}</Text>
             <Field
               icon="mail-outline"
@@ -121,7 +119,7 @@ export default function AuthScreen() {
             <GradientButton title={isSignUp ? 'Create account' : 'Sign in'} onPress={submit} loading={busy} />
           </Animated.View>
 
-          <Animated.View entering={FadeInDown.delay(420).duration(500)}>
+          <Animated.View entering={FadeInDown.delay(440).duration(500)}>
             <PressableScale
               onPress={() => {
                 setIsSignUp((v) => !v);
@@ -133,7 +131,7 @@ export default function AuthScreen() {
             >
               <Text style={styles.switchText}>
                 {isSignUp ? 'Already have an account? ' : 'New to Turzam? '}
-                <Text style={{ color: colors.cyan, fontFamily: fonts.uiBold }}>{isSignUp ? 'Sign in' : 'Create an account'}</Text>
+                <Text style={{ color: colors.accentInk, fontFamily: fonts.uiBold }}>{isSignUp ? 'Sign in' : 'Create an account'}</Text>
               </Text>
             </PressableScale>
           </Animated.View>
@@ -143,23 +141,23 @@ export default function AuthScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  body: { alignItems: 'center', paddingHorizontal: 22, gap: 12 },
-  brand: { color: colors.text, fontFamily: fonts.display, fontSize: 56, marginTop: 14 },
-  tag: { color: colors.textDim, fontFamily: fonts.uiRegular, fontSize: 16, marginBottom: 18 },
-  tagItalic: { fontFamily: fonts.displayItalic, fontSize: 19, color: colors.text },
-  card: {
-    alignSelf: 'stretch',
-    backgroundColor: withAlpha(colors.bgElevated, 0.9),
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    padding: 20,
-    gap: 14,
-  },
-  cardTitle: { color: colors.text, fontFamily: fonts.display, fontSize: 28 },
-  error: { color: colors.danger, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 },
-  info: { color: colors.success, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 },
-  switch: { paddingVertical: 12 },
-  switchText: { color: colors.textDim, fontFamily: fonts.uiRegular, fontSize: 15 },
-});
+const make = (t: Theme) =>
+  StyleSheet.create({
+    body: { alignItems: 'center', paddingHorizontal: 22, gap: 8 },
+    brand: { color: t.colors.text, fontFamily: fonts.display, fontSize: 48, marginTop: 6 },
+    card: {
+      alignSelf: 'stretch',
+      maxWidth: 460,
+      backgroundColor: withAlpha(t.colors.bgElevated, 0.92),
+      borderRadius: radius.xl,
+      borderWidth: 1,
+      borderColor: t.colors.borderStrong,
+      padding: 20,
+      gap: 14,
+    },
+    cardTitle: { color: t.colors.text, fontFamily: fonts.display, fontSize: 28 },
+    error: { color: t.colors.danger, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 },
+    info: { color: t.colors.success, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 },
+    switch: { paddingVertical: 12 },
+    switchText: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 15 },
+  });

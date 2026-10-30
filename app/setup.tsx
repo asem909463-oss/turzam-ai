@@ -3,19 +3,19 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Aurora } from '../src/components/Aurora';
-import { Orb } from '../src/components/Orb';
-import { colors, fonts, radius } from '../src/theme';
+import { Logo } from '../src/components/Logo';
+import { useStyles } from '../src/context/ThemeContext';
+import { fonts, radius, Theme } from '../src/theme';
 
 /** Shown only until the two Supabase values are put in the ".env" file. */
 export default function Setup() {
   const insets = useSafeAreaInsets();
+  const styles = useStyles(make);
   return (
     <View style={{ flex: 1 }}>
       <Aurora />
-      <ScrollView
-        contentContainerStyle={[styles.body, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 30 }]}
-      >
-        <Orb size={72} />
+      <ScrollView contentContainerStyle={[styles.body, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 30 }]}>
+        <Logo size={110} />
         <Animated.Text entering={FadeInDown.delay(100)} style={styles.title}>
           Almost ready
         </Animated.Text>
@@ -38,31 +38,33 @@ export default function Setup() {
   );
 }
 
-const styles = StyleSheet.create({
-  body: { alignItems: 'center', paddingHorizontal: 24, gap: 14 },
-  title: { color: colors.text, fontFamily: fonts.display, fontSize: 44, marginTop: 18 },
-  sub: { color: colors.textDim, fontFamily: fonts.uiRegular, fontSize: 16, textAlign: 'center', lineHeight: 23 },
-  card: {
-    alignSelf: 'stretch',
-    marginTop: 12,
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 20,
-    gap: 8,
-  },
-  step: { color: colors.text, fontFamily: fonts.ui, fontSize: 15, lineHeight: 22 },
-  code: {
-    color: colors.cyan,
-    fontFamily: fonts.uiBold,
-    fontSize: 15,
-    backgroundColor: 'rgba(56,224,240,0.08)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    alignSelf: 'flex-start',
-    overflow: 'hidden',
-  },
-  hint: { color: colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 13, marginTop: 6 },
-});
+const make = (t: Theme) =>
+  StyleSheet.create({
+    body: { alignItems: 'center', paddingHorizontal: 24, gap: 14 },
+    title: { color: t.colors.text, fontFamily: fonts.display, fontSize: 44, marginTop: 10 },
+    sub: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 16, textAlign: 'center', lineHeight: 23 },
+    card: {
+      alignSelf: 'stretch',
+      maxWidth: 560,
+      marginTop: 12,
+      backgroundColor: t.colors.surface,
+      borderRadius: radius.xl,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      padding: 20,
+      gap: 8,
+    },
+    step: { color: t.colors.text, fontFamily: fonts.ui, fontSize: 15, lineHeight: 22 },
+    code: {
+      color: t.colors.accentInk,
+      fontFamily: fonts.uiBold,
+      fontSize: 15,
+      backgroundColor: t.colors.surfaceHi,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 8,
+      alignSelf: 'flex-start',
+      overflow: 'hidden',
+    },
+    hint: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 13, marginTop: 6 },
+  });

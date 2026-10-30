@@ -9,11 +9,13 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import { colors, withAlpha } from '../theme';
+import { useTheme } from '../context/ThemeContext';
+import { withAlpha } from '../theme';
 
 function Blob({
   size,
   color,
+  alpha,
   top,
   left,
   dx,
@@ -22,6 +24,7 @@ function Blob({
 }: {
   size: number;
   color: string;
+  alpha: number;
   top: number;
   left: number;
   dx: number;
@@ -45,7 +48,7 @@ function Blob({
   return (
     <Animated.View style={[{ position: 'absolute', top, left, width: size, height: size }, style]}>
       <LinearGradient
-        colors={[withAlpha(color, 0.34), withAlpha(color, 0.0)]}
+        colors={[withAlpha(color, alpha), withAlpha(color, 0.0)]}
         start={{ x: 0.5, y: 0 }}
         end={{ x: 0.5, y: 1 }}
         style={{ flex: 1, borderRadius: size / 2 }}
@@ -54,13 +57,15 @@ function Blob({
   );
 }
 
-/** Soft, slowly drifting colour clouds behind the whole app. */
+/** Soft, slowly drifting colour clouds behind the whole app. Follows the accent colour. */
 export function Aurora() {
   const { width, height } = useWindowDimensions();
+  const { colors, isDark } = useTheme();
+  const a = isDark ? 0.34 : 0.22;
   return (
     <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.bg }]} pointerEvents="none">
-      <Blob size={width * 1.3} color={colors.violet} top={-width * 0.55} left={-width * 0.35} dx={50} dy={40} duration={7000} />
-      <Blob size={width * 1.1} color={colors.cyan} top={height * 0.45} left={width * 0.3} dx={-60} dy={-50} duration={9000} />
+      <Blob size={width * 1.3} color={colors.accent2} alpha={a} top={-width * 0.55} left={-width * 0.35} dx={50} dy={40} duration={7000} />
+      <Blob size={width * 1.1} color={colors.accent} alpha={a} top={height * 0.45} left={width * 0.3} dx={-60} dy={-50} duration={9000} />
     </View>
   );
 }

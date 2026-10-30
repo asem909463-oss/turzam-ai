@@ -1,48 +1,90 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, {
-  Easing,
-  FadeInLeft,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { Easing, FadeInLeft, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ActionSheet } from './ActionSheet';
+import { Logo } from './Logo';
 import { PressableScale } from './PressableScale';
-import { Orb } from './Orb';
+import { RenameModal } from './RenameModal';
+import { Skeleton } from './Skeleton';
+import { useStyles, useTheme } from '../context/ThemeContext';
 import { getMode } from '../modes';
 import { dayLabel } from '../lib/utils';
-import { colors, fonts, radius, withAlpha } from '../theme';
+import { fonts, radius, Theme, withAlpha } from '../theme';
 import type { Conversation } from '../types';
+
+export type MessageHit = { conversationId: string; snippet: string };
 
 type Props = {
   open: boolean;
+  loading: boolean;
   conversations: Conversation[];
   activeId: string | null;
   email: string;
   onClose: () => void;
   onNewChat: () => void;
   onSelect: (id: string) => void;
+  onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
+  onSearchMessages: (query: string) => Promise<MessageHit[]>;
   onOpenMemory: () => void;
   onOpenSettings: () => void;
 };
 
-type Row = { kind: 'header'; key: string; label: string } | { kind: 'chat'; key: string; chat: Conversation };
+type Row =
+  | { kind: 'header'; key: string; label: string }
+  | { kind: 'chat'; key: string; chat: Conversation }
+  | { kind: 'hit'; key: string; chat: Conversation; snippet: string };
 
 export function HistoryDrawer(p: Props) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
+  const styles = useStyles(make);
   const drawerW = Math.min(width * 0.86, 360);
   const progress = useSharedValue(0);
   const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<MessageHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [menuFor, setMenuFor] = useState<Conversation | null>(null);
+  const [renaming, setRenaming] = useState<Conversation | null>(null);
 
   useEffect(() => {
     progress.value = withTiming(p.open ? 1 : 0, { duration: 300, easing: Easing.out(Easing.cubic) });
-    if (!p.open) setQuery('');
+    if (!p.open) {
+      setQuery('');
+      setHits([]);
+    }
   }, [p.open, progress]);
+
+  // Search inside message text too (after a short pause while typing).
+  const { onSearchMessages } = p;
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setHits([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await onSearchMessages(q);
+        if (!cancelled) setHits(res);
+      } catch {
+        if (!cancelled) setHits([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query, onSearchMessages]);
 
   const panelStyle = useAnimatedStyle(() => ({ transform: [{ translateX: (progress.value - 1) * drawerW }] }));
   const shadeStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
@@ -50,32 +92,46 @@ export function HistoryDrawer(p: Props) {
   const swipeClose = Gesture.Pan()
     .runOnJS(true)
     .activeOffsetX([-12, 12])
+    .failOffsetY([-14, 14])
     .onEnd((e) => {
       if (e.translationX < -50) p.onClose();
     });
 
   const rows = useMemo<Row[]>(() => {
     const q = query.trim().toLowerCase();
-    const list = q ? p.conversations.filter((c) => c.title.toLowerCase().includes(q)) : p.conversations;
+    const byId = new Map(p.conversations.map((c) => [c.id, c]));
     const out: Row[] = [];
-    let last = '';
-    for (const c of list) {
-      const label = dayLabel(c.updated_at);
-      if (label !== last) {
-        out.push({ kind: 'header', key: `h-${label}`, label });
-        last = label;
+    if (!q) {
+      let last = '';
+      for (const c of p.conversations) {
+        const label = dayLabel(c.updated_at);
+        if (label !== last) {
+          out.push({ kind: 'header', key: `h-${label}`, label });
+          last = label;
+        }
+        out.push({ kind: 'chat', key: c.id, chat: c });
       }
-      out.push({ kind: 'chat', key: c.id, chat: c });
+      return out;
+    }
+    const titleMatches = p.conversations.filter((c) => c.title.toLowerCase().includes(q));
+    if (titleMatches.length) {
+      out.push({ kind: 'header', key: 'h-titles', label: 'Chats' });
+      for (const c of titleMatches) out.push({ kind: 'chat', key: c.id, chat: c });
+    }
+    const seen = new Set<string>();
+    const msgRows: Row[] = [];
+    for (const h of hits) {
+      const c = byId.get(h.conversationId);
+      if (!c || seen.has(h.conversationId)) continue;
+      seen.add(h.conversationId);
+      msgRows.push({ kind: 'hit', key: `hit-${h.conversationId}`, chat: c, snippet: h.snippet });
+    }
+    if (msgRows.length) {
+      out.push({ kind: 'header', key: 'h-msgs', label: 'In messages' });
+      out.push(...msgRows);
     }
     return out;
-  }, [p.conversations, query]);
-
-  function confirmDelete(c: Conversation) {
-    Alert.alert('Delete this chat?', `"${c.title}" and its messages will be removed for good.`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => p.onDelete(c.id) },
-    ]);
-  }
+  }, [p.conversations, query, hits]);
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents={p.open ? 'auto' : 'none'}>
@@ -92,12 +148,12 @@ export function HistoryDrawer(p: Props) {
           ]}
         >
           <View style={styles.brandRow}>
-            <Orb size={34} animated={p.open} />
+            <Logo size={44} animated={p.open} />
             <Text style={styles.brand}>Turzam</Text>
           </View>
 
-          <PressableScale onPress={p.onNewChat} style={styles.newBtn} label="New chat">
-            <Ionicons name="add" size={20} color={colors.bg} />
+          <PressableScale onPress={p.onNewChat} style={[styles.newBtn, { backgroundColor: colors.accent }]} label="New chat">
+            <Ionicons name="add" size={20} color={colors.onAccent} />
             <Text style={styles.newText}>New chat</Text>
           </PressableScale>
 
@@ -106,48 +162,73 @@ export function HistoryDrawer(p: Props) {
             <TextInput
               value={query}
               onChangeText={setQuery}
-              placeholder="Search chats"
+              placeholder="Search chats and messages"
               placeholderTextColor={colors.textFaint}
-              selectionColor={colors.cyan}
+              selectionColor={colors.accent}
               style={styles.searchInput}
+              returnKeyType="search"
             />
+            {query ? (
+              <PressableScale onPress={() => setQuery('')} label="Clear search">
+                <Ionicons name="close-circle" size={18} color={colors.textFaint} />
+              </PressableScale>
+            ) : null}
           </View>
 
-          <FlatList
-            data={rows}
-            keyExtractor={(r) => r.key}
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingVertical: 6 }}
-            showsVerticalScrollIndicator={false}
-            ListEmptyComponent={
-              <Text style={styles.empty}>{query ? 'No chats match.' : 'Your chats will appear here.'}</Text>
-            }
-            renderItem={({ item, index }) => {
-              if (item.kind === 'header') return <Text style={styles.header}>{item.label}</Text>;
-              const c = item.chat;
-              const mode = getMode(c.mode);
-              const active = c.id === p.activeId;
-              return (
-                <Animated.View entering={FadeInLeft.delay(Math.min(index, 8) * 30).duration(240)}>
-                  <PressableScale
-                    onPress={() => p.onSelect(c.id)}
-                    onLongPress={() => confirmDelete(c)}
-                    scaleTo={0.97}
-                    haptic={false}
-                    style={[styles.item, active && { backgroundColor: withAlpha(mode.color, 0.12) }]}
-                  >
-                    <View style={[styles.itemDot, { backgroundColor: mode.color }]} />
-                    <Text numberOfLines={1} style={[styles.itemText, active && { color: colors.text }]}>
-                      {c.title}
-                    </Text>
-                    <PressableScale onPress={() => confirmDelete(c)} label="Delete chat" hitSlop={10}>
-                      <Ionicons name="trash-outline" size={17} color={colors.textFaint} />
+          {p.loading && !p.conversations.length ? (
+            <View style={{ gap: 12, paddingTop: 10 }}>
+              {[0, 1, 2, 3, 4].map((i) => (
+                <Skeleton key={i} height={38} radius={12} />
+              ))}
+            </View>
+          ) : (
+            <FlatList
+              data={rows}
+              keyExtractor={(r) => r.key}
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingVertical: 6 }}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              ListFooterComponent={searching ? <Skeleton height={34} radius={10} style={{ marginTop: 8 }} /> : null}
+              ListEmptyComponent={
+                searching ? null : (
+                  <Text style={styles.empty}>{query ? 'Nothing found.' : 'Your chats will appear here.'}</Text>
+                )
+              }
+              renderItem={({ item, index }) => {
+                if (item.kind === 'header') return <Text style={styles.header}>{item.label}</Text>;
+                const c = item.chat;
+                const mode = getMode(c.mode);
+                const active = c.id === p.activeId;
+                return (
+                  <Animated.View entering={FadeInLeft.delay(Math.min(index, 8) * 30).duration(240)}>
+                    <PressableScale
+                      onPress={() => p.onSelect(c.id)}
+                      onLongPress={() => setMenuFor(c)}
+                      scaleTo={0.97}
+                      haptic={false}
+                      style={[styles.item, active && { backgroundColor: withAlpha(mode.color, 0.14) }]}
+                    >
+                      <View style={[styles.itemDot, { backgroundColor: mode.color }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text numberOfLines={1} style={[styles.itemText, active && { color: colors.text }]}>
+                          {c.title}
+                        </Text>
+                        {item.kind === 'hit' ? (
+                          <Text numberOfLines={1} style={styles.snippet}>
+                            {item.snippet}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <PressableScale onPress={() => setMenuFor(c)} label={`Options for ${c.title}`} hitSlop={10}>
+                        <Ionicons name="ellipsis-horizontal" size={18} color={colors.textFaint} />
+                      </PressableScale>
                     </PressableScale>
-                  </PressableScale>
-                </Animated.View>
-              );
-            }}
-          />
+                  </Animated.View>
+                );
+              }}
+            />
+          )}
 
           <View style={styles.footer}>
             <Text numberOfLines={1} style={styles.email}>
@@ -166,81 +247,94 @@ export function HistoryDrawer(p: Props) {
           </View>
         </Animated.View>
       </GestureDetector>
+
+      <ActionSheet
+        visible={!!menuFor}
+        title={menuFor?.title}
+        onClose={() => setMenuFor(null)}
+        actions={[
+          { label: 'Rename', icon: 'create-outline', onPress: () => setRenaming(menuFor) },
+          { label: 'Delete chat', icon: 'trash-outline', destructive: true, onPress: () => menuFor && p.onDelete(menuFor.id) },
+        ]}
+      />
+      <RenameModal
+        visible={!!renaming}
+        initial={renaming?.title ?? ''}
+        onCancel={() => setRenaming(null)}
+        onSave={(title) => {
+          if (renaming) p.onRename(renaming.id, title);
+          setRenaming(null);
+        }}
+      />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  panel: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: colors.bgElevated,
-    borderRightWidth: 1,
-    borderRightColor: colors.borderStrong,
-    paddingHorizontal: 14,
-    gap: 12,
-  },
-  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 4 },
-  brand: { color: colors.text, fontFamily: fonts.display, fontSize: 32 },
-  newBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    height: 48,
-    borderRadius: radius.lg,
-    backgroundColor: colors.cyan,
-  },
-  newText: { color: colors.bg, fontFamily: fonts.uiBold, fontSize: 16 },
-  search: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    height: 42,
-    paddingHorizontal: 12,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  searchInput: { flex: 1, color: colors.text, fontFamily: fonts.uiRegular, fontSize: 15, height: '100%' },
-  header: {
-    color: colors.textFaint,
-    fontFamily: fonts.ui,
-    fontSize: 12,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    marginTop: 14,
-    marginBottom: 6,
-    paddingHorizontal: 6,
-  },
-  item: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 12,
-    borderRadius: radius.md,
-  },
-  itemDot: { width: 8, height: 8, borderRadius: 4 },
-  itemText: { flex: 1, color: colors.textDim, fontFamily: fonts.ui, fontSize: 15 },
-  empty: { color: colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 14, textAlign: 'center', marginTop: 30 },
-  footer: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12, gap: 10 },
-  email: { color: colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 13, paddingHorizontal: 4 },
-  footerBtns: { flexDirection: 'row', gap: 10 },
-  footerBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    height: 46,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  footerText: { color: colors.text, fontFamily: fonts.ui, fontSize: 14 },
-});
+const make = (t: Theme) =>
+  StyleSheet.create({
+    panel: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      bottom: 0,
+      backgroundColor: t.colors.bgElevated,
+      borderRightWidth: 1,
+      borderRightColor: t.colors.borderStrong,
+      paddingHorizontal: 14,
+      gap: 12,
+    },
+    brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 4 },
+    brand: { color: t.colors.text, fontFamily: fonts.display, fontSize: 32 },
+    newBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      height: 48,
+      borderRadius: radius.lg,
+    },
+    newText: { color: t.colors.onAccent, fontFamily: fonts.uiBold, fontSize: 16 },
+    search: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      height: 42,
+      paddingHorizontal: 12,
+      borderRadius: radius.md,
+      backgroundColor: t.colors.surface,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+    },
+    searchInput: { flex: 1, color: t.colors.text, fontFamily: fonts.uiRegular, fontSize: 15, height: '100%' },
+    header: {
+      color: t.colors.textFaint,
+      fontFamily: fonts.ui,
+      fontSize: 12,
+      letterSpacing: 1.2,
+      textTransform: 'uppercase',
+      marginTop: 14,
+      marginBottom: 6,
+      paddingHorizontal: 6,
+    },
+    item: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10, paddingVertical: 12, borderRadius: radius.md },
+    itemDot: { width: 8, height: 8, borderRadius: 4 },
+    itemText: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 15 },
+    snippet: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 12.5, marginTop: 2 },
+    empty: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 14, textAlign: 'center', marginTop: 30 },
+    footer: { borderTopWidth: 1, borderTopColor: t.colors.border, paddingTop: 12, gap: 10 },
+    email: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 13, paddingHorizontal: 4 },
+    footerBtns: { flexDirection: 'row', gap: 10 },
+    footerBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      height: 46,
+      borderRadius: radius.md,
+      backgroundColor: t.colors.surface,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+    },
+    footerText: { color: t.colors.text, fontFamily: fonts.ui, fontSize: 14 },
+  });

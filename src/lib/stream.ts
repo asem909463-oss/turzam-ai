@@ -1,10 +1,13 @@
 import { fetch } from 'expo/fetch';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from './config';
+import type { ProviderId } from '../types';
+
+export type ApiFile = { name: string; mime: string; path: string };
 
 export type ApiMessage = {
   role: 'user' | 'model';
   text: string;
-  images?: { mime: string; data: string }[];
+  files?: ApiFile[];
 };
 
 const FN_URL = `${SUPABASE_URL}/functions/v1/chat`;
@@ -24,6 +27,8 @@ async function readError(res: Response): Promise<string> {
   } catch {
     // ignore
   }
+  if (res.status === 404) return 'The chat backend is not deployed yet. Run the "functions deploy chat" step in the README.';
+  if (res.status === 401) return 'Please sign in again.';
   return `Request failed (${res.status})`;
 }
 
@@ -31,15 +36,17 @@ async function readError(res: Response): Promise<string> {
 export async function streamChat(opts: {
   token: string;
   mode: string;
+  provider: string;
   messages: ApiMessage[];
   signal: AbortSignal;
   onText: (text: string) => void;
+  onMeta?: (meta: { provider?: ProviderId }) => void;
 }): Promise<void> {
   const res = await fetch(FN_URL, {
     method: 'POST',
     signal: opts.signal,
     headers: headers(opts.token),
-    body: JSON.stringify({ action: 'chat', mode: opts.mode, messages: opts.messages }),
+    body: JSON.stringify({ action: 'chat', mode: opts.mode, provider: opts.provider, messages: opts.messages }),
   });
 
   if (!res.ok) throw new Error(await readError(res as unknown as Response));
@@ -59,20 +66,21 @@ export async function streamChat(opts: {
       if (!line.startsWith('data:')) continue;
       const payload = line.slice(5).trim();
       if (!payload) continue;
-      let evt: { t?: string; error?: string; done?: boolean };
+      let evt: { t?: string; error?: string; done?: boolean; meta?: { provider?: ProviderId } };
       try {
         evt = JSON.parse(payload);
       } catch {
         continue;
       }
       if (evt.error) throw new Error(evt.error);
+      if (evt.meta) opts.onMeta?.(evt.meta);
       if (evt.t) opts.onText(evt.t);
       if (evt.done) return;
     }
   }
 }
 
-/** Normal (non-streaming) calls: "title" and "remember". */
+/** Normal (non-streaming) calls: "models", "title", "remember", "suggest". */
 export async function callFunction<T>(token: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(FN_URL, {
     method: 'POST',

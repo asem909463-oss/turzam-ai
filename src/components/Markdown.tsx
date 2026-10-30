@@ -3,7 +3,9 @@ import { Linking, Platform, StyleSheet, Text, TextStyle, View } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { PressableScale } from './PressableScale';
-import { colors, fonts, radius, withAlpha } from '../theme';
+import { useToast } from '../context/ToastContext';
+import { useStyles, useTheme } from '../context/ThemeContext';
+import { fonts, radius, Theme, withAlpha } from '../theme';
 
 const MONO = Platform.select({ ios: 'Menlo', default: 'monospace' });
 
@@ -102,7 +104,8 @@ export function parseBlocks(src: string): Block[] {
 
 const INLINE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*|\[[^\]\n]+\]\([^)\s]+\))/g;
 
-function Inline({ text, style }: { text: string; style?: TextStyle }) {
+function Inline({ text, style }: { text: string; style?: TextStyle | TextStyle[] }) {
+  const styles = useStyles(make);
   const parts = text.split(INLINE);
   return (
     <Text style={style}>
@@ -144,6 +147,9 @@ function Inline({ text, style }: { text: string; style?: TextStyle }) {
 }
 
 function CodeBlock({ lang, text }: { lang: string; text: string }) {
+  const styles = useStyles(make);
+  const { colors } = useTheme();
+  const toast = useToast();
   const [copied, setCopied] = useState(false);
   return (
     <View style={styles.codeBox}>
@@ -154,6 +160,7 @@ function CodeBlock({ lang, text }: { lang: string; text: string }) {
           onPress={async () => {
             await Clipboard.setStringAsync(text);
             setCopied(true);
+            toast.show('Code copied', 'success');
             setTimeout(() => setCopied(false), 1600);
           }}
           style={styles.copyBtn}
@@ -170,6 +177,7 @@ function CodeBlock({ lang, text }: { lang: string; text: string }) {
 }
 
 function MarkdownBase({ text }: { text: string }) {
+  const styles = useStyles(make);
   const blocks = useMemo(() => parseBlocks(text), [text]);
   return (
     <View style={{ gap: 10 }}>
@@ -212,7 +220,7 @@ function MarkdownBase({ text }: { text: string }) {
           case 'quote':
             return (
               <View key={i} style={styles.quote}>
-                <Inline text={b.text} style={[styles.p, { color: colors.textDim }]} />
+                <Inline text={b.text} style={[styles.p, styles.quoteText]} />
               </View>
             );
           case 'hr':
@@ -231,43 +239,45 @@ function MarkdownBase({ text }: { text: string }) {
 
 export const Markdown = memo(MarkdownBase);
 
-const styles = StyleSheet.create({
-  p: { color: colors.text, fontFamily: fonts.uiRegular, fontSize: 16, lineHeight: 25 },
-  bold: { fontFamily: fonts.uiBold },
-  italic: { fontStyle: 'italic' },
-  inlineCode: {
-    fontFamily: MONO,
-    fontSize: 14,
-    color: colors.cyan,
-    backgroundColor: withAlpha(colors.cyan, 0.1),
-  },
-  link: { color: colors.cyan, textDecorationLine: 'underline' },
-  h: { color: colors.text, fontFamily: fonts.display, marginTop: 4 },
-  h1: { fontSize: 30, lineHeight: 36 },
-  h2: { fontSize: 25, lineHeight: 31 },
-  h3: { fontSize: 20, lineHeight: 26 },
-  li: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.violet, marginTop: 10 },
-  num: { color: colors.violet, fontFamily: fonts.uiBold, fontSize: 16, lineHeight: 25, minWidth: 22 },
-  quote: { borderLeftWidth: 3, borderLeftColor: colors.violet, paddingLeft: 12, paddingVertical: 2 },
-  hr: { height: 1, backgroundColor: colors.border, marginVertical: 4 },
-  codeBox: {
-    backgroundColor: '#070B1C',
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: 'hidden',
-  },
-  codeHead: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  codeLang: { color: colors.textDim, fontFamily: fonts.ui, fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 },
-  copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  copyText: { color: colors.textDim, fontFamily: fonts.ui, fontSize: 12 },
-  codeText: { color: '#D6DBFF', fontFamily: MONO, fontSize: 13.5, lineHeight: 20, padding: 14 },
-});
+const make = (t: Theme) =>
+  StyleSheet.create({
+    p: { color: t.colors.text, fontFamily: fonts.uiRegular, fontSize: 16, lineHeight: 25 },
+    quoteText: { color: t.colors.textDim },
+    bold: { fontFamily: fonts.uiBold },
+    italic: { fontStyle: 'italic' },
+    inlineCode: {
+      fontFamily: MONO,
+      fontSize: 14,
+      color: t.colors.accentInk,
+      backgroundColor: withAlpha(t.colors.accent, 0.12),
+    },
+    link: { color: t.colors.accentInk, textDecorationLine: 'underline' },
+    h: { color: t.colors.text, fontFamily: fonts.display, marginTop: 4 },
+    h1: { fontSize: 30, lineHeight: 36 },
+    h2: { fontSize: 25, lineHeight: 31 },
+    h3: { fontSize: 20, lineHeight: 26 },
+    li: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+    dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: t.colors.accent, marginTop: 10 },
+    num: { color: t.colors.accentInk, fontFamily: fonts.uiBold, fontSize: 16, lineHeight: 25, minWidth: 22 },
+    quote: { borderLeftWidth: 3, borderLeftColor: t.colors.accent2, paddingLeft: 12, paddingVertical: 2 },
+    hr: { height: 1, backgroundColor: t.colors.border, marginVertical: 4 },
+    codeBox: {
+      backgroundColor: t.colors.codeBg,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      overflow: 'hidden',
+    },
+    codeHead: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      backgroundColor: withAlpha(t.colors.accent, 0.08),
+    },
+    codeLang: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 },
+    copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+    copyText: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 12 },
+    codeText: { color: t.colors.codeText, fontFamily: MONO, fontSize: 13.5, lineHeight: 20, padding: 14 },
+  });

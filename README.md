@@ -1,8 +1,17 @@
 # Turzam AI
 
-A premium AI assistant app for iOS and Android. Built with **React Native + Expo + TypeScript**, **Supabase** (login + database) and **Google Gemini** (the AI).
+**The AI for business & founders.** Also built for creativity.
 
-**Features:** streaming answers · 5 AI modes (Balanced, Deep Think, Creative, Coder, Tutor) · chat history with search · long-term memory you control · image upload (camera or library) · animated buttons with haptics · private per-user data.
+React Native + Expo + TypeScript app for iOS and Android. Supabase handles login and data. The AI runs on a small server function, so **no AI key is ever inside the app**.
+
+## What it does
+
+- **Founder mode** (default): strategy, pitch, pricing, outreach, hiring, operations. Plus Creative, Balanced, Deep Think, Coder and Tutor modes.
+- **Attach images, PDFs and text files** (txt, md, csv, json, code). The AI reads them and answers from what is inside.
+- **Chat tools:** streaming answers, stop, regenerate, copy, rename, delete, search (titles and message text), suggested prompts, tappable follow-up ideas.
+- **Memory** you control: remembers lasting facts (your company, goals) and lets you edit or clear them.
+- **Design:** light / dark / system theme, 6 accent colours, animated logo, "thinking" star, springy buttons with haptics, toasts.
+- **Models:** Gemini, ChatGPT (OpenAI) and Claude (Anthropic). The app shows each one as **Connected** only when its key is set on the server. Gemini is required; the other two are optional.
 
 ## Where do my keys go?
 
@@ -10,7 +19,9 @@ A premium AI assistant app for iOS and Android. Built with **React Native + Expo
 |---|---|---|
 | Supabase **Project URL** | `.env` (copy of `.env.example`) | Yes |
 | Supabase **anon public key** | `.env` | Yes (protected by Row Level Security) |
-| **Gemini API key** | `supabase/.env`, then uploaded to Supabase as a secret (Step 5) | **Never** in the app |
+| **Gemini API key** (required) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
+| OpenAI key (optional, enables ChatGPT) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
+| Anthropic key (optional, enables Claude) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
 | Supabase **service_role** key | **Nowhere.** Turzam never needs it. | Never |
 
 `.env` and `supabase/.env` are in `.gitignore`, so GitHub never sees them.
@@ -25,9 +36,10 @@ npm install
 npx expo install --fix
 ```
 
-**2. Create the database**
+**2. Create or update the database**
 1. In Supabase click **New project** and wait until it is ready.
 2. Open **SQL Editor → New query**, paste everything from `supabase/schema.sql`, click **Run**.
+   Already ran an older version? Run it again. It is safe to repeat and adds the new columns and the file storage.
 3. Optional, easier testing: **Authentication → Providers → Email** and turn **Confirm email** off.
 
 **3. Put the Supabase keys in `.env`**
@@ -37,14 +49,14 @@ notepad .env
 ```
 Paste the **Project URL** and **anon public** key from Supabase → **Project Settings → API**. Save.
 
-**4. Put the Gemini key in `supabase/.env`**
+**4. Put the AI key(s) in `supabase/.env`**
 ```powershell
 copy supabase\.env.example supabase\.env
 notepad supabase\.env
 ```
-Replace `PASTE-YOUR-GEMINI-API-KEY-HERE` with your key. Save.
+Replace `PASTE-YOUR-GEMINI-API-KEY-HERE` with your Gemini key. To turn on ChatGPT or Claude, remove the `#` in front of its line and paste the key. Save.
 
-**5. Upload the Gemini key and the backend to Supabase**
+**5. Upload the keys and the backend to Supabase**
 Your project ref is the part of your Supabase URL before `.supabase.co`.
 ```powershell
 npx supabase login
@@ -52,6 +64,7 @@ npx supabase link --project-ref YOUR-PROJECT-REF
 npx supabase secrets set --env-file supabase/.env
 npx supabase functions deploy chat
 ```
+Added a key later? Repeat only the `secrets set` line, then reopen the app.
 
 **6. Run the app**
 ```powershell
@@ -62,23 +75,30 @@ Scan the QR code with Expo Go (Android) or the Camera app (iPhone). Create an ac
 ## How it works
 
 ```
-Phone app ──(your login token)──> Supabase Edge Function "chat" ──(Gemini key)──> Gemini
+Phone app ──(your login token)──> Supabase Edge Function "chat" ──(server-side keys)──> Gemini / ChatGPT / Claude
     │                                     │
-    └──────── Supabase database (RLS: every user only sees their own rows)
+    └── private file storage + database (Row Level Security: every user only sees their own rows)
 ```
 
-- `app/` screens: chat, sign-in, settings, memory.
-- `src/` components, chat logic (`hooks/useChat.ts`), theme, modes.
-- `supabase/schema.sql` tables, security rules, private image storage.
-- `supabase/functions/chat/index.ts` the only code that touches the Gemini key.
+- `app/` screens: chat, sign-in, settings (with About), memory.
+- `src/` components, chat logic (`hooks/useChat.ts`), theme, modes, attachments.
+- `supabase/schema.sql` tables, security rules, private file storage.
+- `supabase/functions/chat/index.ts` the only code that touches AI keys. It reads attached files with the user's own permission, so nobody can read someone else's files.
 
-Change the Gemini model any time with `GEMINI_MODEL` in `supabase/.env`, then repeat the `secrets set` command. No app update needed.
+Models can be changed any time with `GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL` in `supabase/.env`, then repeat the `secrets set` command. No app update needed.
+
+## Attachments
+
+Up to 4 files per message, 10 MB each. Supported: images, PDF, and text-like files (txt, md, csv, json, xml, html, code). Word and Excel files are not supported yet; export them to PDF or CSV first.
 
 ## Troubleshooting
 
-- **"Almost ready" screen**: `.env` is missing or still has the placeholder values. Fix it, then `npx expo start -c`.
-- **"The server has no GEMINI_API_KEY yet"**: redo Step 5.
-- **"The AI service returned an error (4xx)"**: check the key and the model name in `supabase/.env`, then redo `secrets set`.
+- **"Almost ready" screen**: `.env` is missing or still has placeholder values. Fix it, then `npx expo start -c`.
+- **"The server has no AI key yet"**: redo Step 5.
+- **"The chat backend is not deployed yet"**: run `npx supabase functions deploy chat`.
+- **"...returned an error (4xx)"**: check that provider's key and model name in `supabase/.env`, then redo `secrets set`.
+- **"Could not save" in Settings, or file upload fails**: run the latest `supabase/schema.sql` (Step 2).
+- **ChatGPT or Claude shows "Not connected"**: its key is not set on the server yet (Step 4 and 5).
 - **Cannot sign in right after sign-up**: confirm the email, or turn off **Confirm email** (Step 2.3).
 - **Phone cannot find the app**: phone and computer must be on the same Wi‑Fi. Otherwise run `npx expo start --tunnel`.
 
@@ -95,5 +115,6 @@ Change `com.turzam.ai` in `app.json` to your own bundle id first.
 
 ## Known limits
 
-- Deleting your account itself needs a server action with the service-role key; it is not included. Chats and memories can be deleted in the app.
-- Per-user rate limits for Gemini are not included yet. Add them before a public launch.
+- Deleting your account itself needs a server action with the service-role key; it is not included. Chats, files and memories can be deleted in the app.
+- Per-user rate limits for AI usage are not included yet. Add them before a public launch.
+- In-app toasts are included; push notifications are not.

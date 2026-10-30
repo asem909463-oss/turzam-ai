@@ -2,17 +2,18 @@ import React, { useEffect } from 'react';
 import { Pressable, StyleSheet } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import Animated, { interpolateColor, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
-import { colors } from '../theme';
+import { useTheme } from '../context/ThemeContext';
 
 export function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  const { colors } = useTheme();
   const p = useSharedValue(value ? 1 : 0);
   useEffect(() => {
     p.value = withSpring(value ? 1 : 0, { damping: 14, stiffness: 220 });
   }, [value, p]);
 
-  const track = useAnimatedStyle(() => ({
-    backgroundColor: interpolateColor(p.value, [0, 1], [colors.surfaceHi, colors.violet]),
-  }));
+  const off = colors.surfaceHi;
+  const on = colors.accent;
+  const track = useAnimatedStyle(() => ({ backgroundColor: interpolateColor(p.value, [0, 1], [off, on]) }));
   const knob = useAnimatedStyle(() => ({ transform: [{ translateX: p.value * 22 }] }));
 
   return (
@@ -25,7 +26,7 @@ export function Toggle({ value, onChange }: { value: boolean; onChange: (v: bool
         onChange(!value);
       }}
     >
-      <Animated.View style={[styles.track, track]}>
+      <Animated.View style={[styles.track, { borderColor: colors.borderStrong }, track]}>
         <Animated.View style={[styles.knob, knob]} />
       </Animated.View>
     </Pressable>
@@ -33,6 +34,6 @@ export function Toggle({ value, onChange }: { value: boolean; onChange: (v: bool
 }
 
 const styles = StyleSheet.create({
-  track: { width: 52, height: 30, borderRadius: 15, padding: 3, justifyContent: 'center' },
-  knob: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#fff' },
+  track: { width: 52, height: 30, borderRadius: 15, padding: 3, justifyContent: 'center', borderWidth: 1 },
+  knob: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff' },
 });

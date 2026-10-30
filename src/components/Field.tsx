@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { StyleSheet, TextInput, TextInputProps, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { interpolateColor, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { colors, fonts, radius } from '../theme';
 import { PressableScale } from './PressableScale';
+import { useStyles, useTheme } from '../context/ThemeContext';
+import { fonts, radius, Theme } from '../theme';
 
 type Props = TextInputProps & {
   icon: React.ComponentProps<typeof Ionicons>['name'];
@@ -12,12 +13,18 @@ type Props = TextInputProps & {
 
 /** Text field whose border glows while focused. */
 export function Field({ icon, secureToggle, style, onFocus, onBlur, ...rest }: Props) {
+  const { colors } = useTheme();
+  const styles = useStyles(make);
   const focus = useSharedValue(0);
   const [hidden, setHidden] = useState(!!secureToggle);
 
+  const from = colors.border;
+  const to = colors.accent;
+  const bgFrom = colors.surface;
+  const bgTo = colors.surfaceHi;
   const box = useAnimatedStyle(() => ({
-    borderColor: interpolateColor(focus.value, [0, 1], [colors.border, colors.violet]),
-    backgroundColor: interpolateColor(focus.value, [0, 1], [colors.surface, colors.surfaceHi]),
+    borderColor: interpolateColor(focus.value, [0, 1], [from, to]),
+    backgroundColor: interpolateColor(focus.value, [0, 1], [bgFrom, bgTo]),
   }));
 
   return (
@@ -25,7 +32,7 @@ export function Field({ icon, secureToggle, style, onFocus, onBlur, ...rest }: P
       <Ionicons name={icon} size={19} color={colors.textDim} />
       <TextInput
         placeholderTextColor={colors.textFaint}
-        selectionColor={colors.cyan}
+        selectionColor={colors.accent}
         {...rest}
         secureTextEntry={secureToggle ? hidden : rest.secureTextEntry}
         onFocus={(e) => {
@@ -49,15 +56,16 @@ export function Field({ icon, secureToggle, style, onFocus, onBlur, ...rest }: P
   );
 }
 
-const styles = StyleSheet.create({
-  box: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    height: 54,
-    paddingHorizontal: 16,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-  },
-  input: { flex: 1, color: colors.text, fontFamily: fonts.ui, fontSize: 16, height: '100%' },
-});
+const make = (t: Theme) =>
+  StyleSheet.create({
+    box: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      height: 54,
+      paddingHorizontal: 16,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+    },
+    input: { flex: 1, color: t.colors.text, fontFamily: fonts.ui, fontSize: 16, height: '100%' },
+  });

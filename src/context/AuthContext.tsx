@@ -12,7 +12,8 @@ type AuthState = {
   /** Returns { error } or { needsConfirm: true } when the email must be confirmed first. */
   signUp: (email: string, password: string) => Promise<{ error?: string; needsConfirm?: boolean }>;
   signOut: () => Promise<void>;
-  updateProfile: (patch: Partial<Omit<Profile, 'id'>>) => Promise<void>;
+  /** Returns an error message, or null when saved. */
+  updateProfile: (patch: Partial<Omit<Profile, 'id'>>) => Promise<string | null>;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -70,9 +71,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const updateProfile = useCallback(
     async (patch: Partial<Omit<Profile, 'id'>>) => {
-      if (!userId) return;
+      if (!userId) return 'Not signed in.';
       setProfile((p) => (p ? { ...p, ...patch } : p));
-      await supabase.from('profiles').update(patch).eq('id', userId);
+      const { error } = await supabase.from('profiles').update(patch).eq('id', userId);
+      return error ? error.message : null;
     },
     [userId],
   );
