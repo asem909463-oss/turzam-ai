@@ -7,6 +7,8 @@ import { Aurora } from '../src/components/Aurora';
 import { PressableScale } from '../src/components/PressableScale';
 import { ScreenHeader } from '../src/components/ScreenHeader';
 import { Skeleton } from '../src/components/Skeleton';
+import { Toggle } from '../src/components/Toggle';
+import { useAuth } from '../src/context/AuthContext';
 import { useStyles, useTheme } from '../src/context/ThemeContext';
 import { useToast } from '../src/context/ToastContext';
 import { supabase } from '../src/lib/supabase';
@@ -18,12 +20,14 @@ export default function MemoryScreen() {
   const { colors } = useTheme();
   const styles = useStyles(make);
   const toast = useToast();
+  const { profile, updateProfile } = useAuth();
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [items, setItems] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from('memories').select('id,content,created_at').order('created_at', { ascending: false });
+    const { data } = await supabase.from('memories').select('id,content,pinned,created_at').order('pinned', { ascending: false }).order('created_at', { ascending: false });
     setItems((data ?? []) as Memory[]);
     setLoading(false);
   }, []);
@@ -36,11 +40,38 @@ export default function MemoryScreen() {
     const content = draft.trim().slice(0, 280);
     if (!content) return;
     setDraft('');
-    const { data, error } = await supabase.from('memories').insert({ content }).select('id,content,created_at').single();
+    const { data, error } = await supabase.from('memories').insert({ content }).select('id,content,pinned,created_at').single();
     if (error) toast.show(`Could not save: ${error.message}`, 'error');
     else if (data) {
       setItems((prev) => [data as Memory, ...prev]);
       toast.show('Remembered', 'success');
+    }
+  }
+
+  async function togglePin(m: Memory) {
+    const pinned = !m.pinned;
+    setItems((prev) => {
+      const next = prev.map((x) => (x.id === m.id ? { ...x, pinned } : x));
+      return [...next.filter((x) => x.pinned), ...next.filter((x) => !x.pinned)];
+    });
+    const { error } = await supabase.from('memories').update({ pinned }).eq('id', m.id);
+    if (error) {
+      toast.show('Could not update that memory', 'error');
+      load();
+    } else toast.show(pinned ? 'Pinned: Turzam keeps this in mind first' : 'Unpinned', 'info');
+  }
+
+  async function saveEdit() {
+    if (!editing) return;
+    const text = editing.text.trim().slice(0, 280);
+    const id = editing.id;
+    setEditing(null);
+    if (!text) return;
+    setItems((prev) => prev.map((x) => (x.id === id ? { ...x, content: text } : x)));
+    const { error } = await supabase.from('memories').update({ content: text }).eq('id', id);
+    if (error) {
+      toast.show('Could not save the change', 'error');
+      load();
     }
   }
 
@@ -84,9 +115,16 @@ export default function MemoryScreen() {
       />
       <View style={styles.column}>
         <Text style={styles.intro}>
-          Lasting facts Turzam remembers about you, like your company or goals. It picks them up from your chats, and you can add or
-          remove any of them.
+          Lasting facts Turzam remembers about you, like your company or goals. It picks them up from your chats. Tap a note to edit it, pin the ones that matter most, or remove any of them. Sensitive details (health, money, passwords) are never saved automatically.
         </Text>
+
+        <View style={styles.pauseRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.itemText}>Use and learn memories</Text>
+            <Text style={styles.pauseHint}>{profile?.memory_enabled !== false ? 'On: Turzam uses these and picks up new facts.' : 'Off: nothing is used or saved.'}</Text>
+          </View>
+          <Toggle value={profile?.memory_enabled !== false} onChange={(v) => updateProfile({ memory_enabled: v })} />
+        </View>
 
         <View style={styles.addRow}>
           <TextInput
@@ -135,7 +173,27 @@ export default function MemoryScreen() {
                 style={styles.item}
               >
                 <View style={styles.bullet} />
-                <Text style={styles.itemText}>{item.content}</Text>
+                {editing?.id === item.id ? (
+                  <TextInput
+                    autoFocus
+                    multiline
+                    value={editing.text}
+                    onChangeText={(t) => setEditing({ id: item.id, text: t })}
+                    onBlur={saveEdit}
+                    onSubmitEditing={saveEdit}
+                    blurOnSubmit
+                    maxLength={280}
+                    selectionColor={colors.accent}
+                    style={[styles.itemText, styles.editBox]}
+                  />
+                ) : (
+                  <PressableScale style={{ flex: 1 }} haptic={false} scaleTo={0.99} label="Edit this memory" onPress={() => setEditing({ id: item.id, text: item.content })}>
+                    <Text style={styles.itemText}>{item.content}</Text>
+                  </PressableScale>
+                )}
+                <PressableScale onPress={() => togglePin(item)} label={item.pinned ? 'Unpin memory' : 'Pin memory'}>
+                  <Ionicons name={item.pinned ? 'pin' : 'pin-outline'} size={19} color={item.pinned ? colors.accentInk : colors.textFaint} />
+                </PressableScale>
                 <PressableScale onPress={() => remove(item.id)} label="Forget this">
                   <Ionicons name="close-circle" size={22} color={colors.textFaint} />
                 </PressableScale>
@@ -178,6 +236,9 @@ const make = (t: Theme) =>
       padding: 14,
     },
     bullet: { width: 8, height: 8, borderRadius: 4, backgroundColor: t.colors.accent },
+    pauseRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingBottom: 14 },
+    pauseHint: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 12.5, marginTop: 2 },
+    editBox: { borderBottomWidth: 1, borderBottomColor: t.colors.accent, paddingBottom: 4 },
     itemText: { flex: 1, color: t.colors.text, fontFamily: fonts.uiRegular, fontSize: 15, lineHeight: 21 },
     emptyBox: { alignItems: 'center', gap: 12, marginTop: 50, paddingHorizontal: 30 },
     emptyText: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 14, lineHeight: 21, textAlign: 'center' },

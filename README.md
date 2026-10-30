@@ -11,6 +11,12 @@ React Native + Expo + TypeScript app for iOS and Android. Supabase handles login
 - **Chat tools:** streaming answers, stop, regenerate, copy, rename, delete, search (titles and message text), suggested prompts, tappable follow-up ideas.
 - **Memory** you control: remembers lasting facts (your company, goals) and lets you edit or clear them.
 - **Design:** light / dark / system theme, 6 accent colours, animated logo, "thinking" star, springy buttons with haptics, toasts.
+- **Voice conversations:** tap the mic, talk, Turzam answers out loud and listens again (hands-free). Speech to text runs on the server with your Gemini key; the spoken answer uses your phone's built-in voice (free).
+- **Web search with sources:** the globe button turns it on. Answers come with clickable source links (uses Gemini's Google Search grounding, same Gemini key).
+- **Personalities:** Professional, Analyst, Creative, Teacher, Entrepreneur. They combine with any mode.
+- **Custom instructions** (Settings): your standing rules for how Turzam answers.
+- **Organise:** pin chats, folders, archive, search. **Export** any chat to PDF, Markdown or text.
+- **Image understanding:** multi-image, tap-to-zoom, quick actions (Describe, Extract text, Explain chart, Review design, Compare).
 - **Models:** Gemini, ChatGPT (OpenAI) and Claude (Anthropic). The app shows each one as **Connected** only when its key is set on the server. Gemini is required; the other two are optional.
 
 ## Where do my keys go?
@@ -87,9 +93,24 @@ Phone app ──(your login token)──> Supabase Edge Function "chat" ──(s
 
 Models can be changed any time with `GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL` in `supabase/.env`, then repeat the `secrets set` command. No app update needed.
 
+## Extra keys and costs (v1.2)
+
+No new keys are needed. Everything new runs on the **Gemini key you already have**:
+
+| Feature | Needs | Cost |
+|---|---|---|
+| Web search + sources | Gemini key | Google bills Search grounding separately from normal tokens once you pass the free daily allowance (see Google AI pricing). Search is off unless the user turns it on. |
+| Voice input (speech to text) | Gemini key | Normal Gemini audio token pricing. |
+| Spoken answers | Nothing | Free, uses the phone's own voice. |
+| PDF / Markdown / text export | Nothing | Free, made on the phone. |
+
+Search and voice input are **Gemini only**. If you only connect ChatGPT or Claude, those two buttons say they need the Gemini key. A natural-sounding cloud voice (OpenAI/ElevenLabs/Google TTS) would need a new paid key and is not included.
+
+**After updating:** run the new `supabase/schema.sql` again, redeploy with `npx supabase functions deploy chat`, then `npm install` and `npx expo install --fix`. Voice and export use native modules (expo-audio, expo-speech, expo-print, expo-sharing), which are included in Expo Go, but microphone permission text is set in `app.json`, so rebuild if you use a custom build.
+
 ## Attachments
 
-Up to 4 files per message, 10 MB each. Supported: images, PDF, and text-like files (txt, md, csv, json, xml, html, code). Word and Excel files are not supported yet; export them to PDF or CSV first.
+Up to 4 files per message, 10 MB each. Photos are sent at high quality and you can pick several at once. Supported: images, PDF, and text-like files (txt, md, csv, json, xml, html, code). Word and Excel files are not supported yet; export them to PDF or CSV first.
 
 ## Troubleshooting
 
@@ -116,5 +137,8 @@ Change `com.turzam.ai` in `app.json` to your own bundle id first.
 ## Known limits
 
 - Deleting your account itself needs a server action with the service-role key; it is not included. Chats, files and memories can be deleted in the app.
+- Voice and search have no per-user limits yet, so add rate limits before a public launch (each voice turn and each search costs money).
+- Voice replies are read in the phone's voice for the chosen language; the app cannot detect the answer's language, so set the voice language in Settings if you chat in more than one.
+- Web-search sources come as Google redirect links; they open the real page.
 - Per-user rate limits for AI usage are not included yet. Add them before a public launch.
 - In-app toasts are included; push notifications are not.

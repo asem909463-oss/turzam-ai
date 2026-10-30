@@ -78,9 +78,10 @@ export function validateFile(f: PickedFile, existing: PickedFile[]): string | nu
 
 const IMAGE_OPTS: ImagePicker.ImagePickerOptions = {
   mediaTypes: ['images'],
-  quality: 0.7,
+  quality: 0.85,
   allowsEditing: false,
-  allowsMultipleSelection: false,
+  allowsMultipleSelection: true,
+  selectionLimit: MAX_FILES,
 };
 
 function fromImageResult(res: ImagePicker.ImagePickerResult): PickedFile[] {

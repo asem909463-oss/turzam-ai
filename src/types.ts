@@ -1,4 +1,5 @@
 export type ModeId = 'founder' | 'balanced' | 'think' | 'create' | 'code' | 'tutor';
+export type PersonaId = 'none' | 'professional' | 'analyst' | 'creative' | 'teacher' | 'entrepreneur';
 export type ProviderId = 'gemini' | 'openai' | 'anthropic';
 export type ModelChoice = 'auto' | ProviderId;
 
@@ -7,8 +8,16 @@ export type Conversation = {
   title: string;
   mode: ModeId;
   model?: ModelChoice;
+  persona?: PersonaId;
+  pinned?: boolean;
+  archived?: boolean;
+  folder_id?: string | null;
   updated_at: string;
 };
+
+export type Folder = { id: string; name: string; color: string };
+
+export type Source = { title: string; url: string };
 
 /** A file attached to a message (image, PDF or text file). */
 export type Attachment = {
@@ -36,6 +45,8 @@ export type ChatMessage = {
   content: string;
   attachments?: Attachment[];
   provider?: ProviderId | null;
+  sources?: Source[];
+  searched?: boolean;
   streaming?: boolean;
   /** Shown in the thinking indicator while files are uploaded / read. */
   working?: string;
@@ -48,13 +59,20 @@ export type Profile = {
   memory_enabled: boolean;
   default_mode: ModeId;
   default_model?: ModelChoice;
+  default_persona?: PersonaId;
+  custom_instructions?: string;
+  voice_reply?: boolean;
+  voice_lang?: string;
 };
 
 export type Memory = {
   id: string;
   content: string;
+  pinned?: boolean;
   created_at: string;
 };
+
+export type Capabilities = { search: boolean; voiceInput: boolean };
 
 export type ProviderInfo = {
   id: ProviderId;

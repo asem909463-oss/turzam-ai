@@ -13,7 +13,8 @@ import { useStyles, useTheme } from '../context/ThemeContext';
 import { getMode } from '../modes';
 import { dayLabel } from '../lib/utils';
 import { fonts, radius, Theme, withAlpha } from '../theme';
-import type { Conversation } from '../types';
+import type { Conversation, Folder } from '../types';
+import type { ExportFormat } from '../lib/export';
 
 export type MessageHit = { conversationId: string; snippet: string };
 
@@ -21,6 +22,7 @@ type Props = {
   open: boolean;
   loading: boolean;
   conversations: Conversation[];
+  folders: Folder[];
   activeId: string | null;
   email: string;
   onClose: () => void;
@@ -28,6 +30,13 @@ type Props = {
   onSelect: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
+  onPin: (id: string, pinned: boolean) => void;
+  onArchive: (id: string, archived: boolean) => void;
+  onMove: (id: string, folderId: string | null) => void;
+  onExport: (id: string, format: ExportFormat) => void;
+  onCreateFolder: (name: string) => void;
+  onRenameFolder: (id: string, name: string) => void;
+  onDeleteFolder: (id: string) => void;
   onSearchMessages: (query: string) => Promise<MessageHit[]>;
   onOpenMemory: () => void;
   onOpenSettings: () => void;
@@ -35,6 +44,8 @@ type Props = {
 
 type Row =
   | { kind: 'header'; key: string; label: string }
+  | { kind: 'folder'; key: string; folder: Folder; count: number; open: boolean }
+  | { kind: 'toggle'; key: string; label: string; count: number; open: boolean }
   | { kind: 'chat'; key: string; chat: Conversation }
   | { kind: 'hit'; key: string; chat: Conversation; snippet: string };
 
@@ -50,6 +61,12 @@ export function HistoryDrawer(p: Props) {
   const [searching, setSearching] = useState(false);
   const [menuFor, setMenuFor] = useState<Conversation | null>(null);
   const [renaming, setRenaming] = useState<Conversation | null>(null);
+  const [moveFor, setMoveFor] = useState<Conversation | null>(null);
+  const [exportFor, setExportFor] = useState<Conversation | null>(null);
+  const [folderMenu, setFolderMenu] = useState<Folder | null>(null);
+  const [folderName, setFolderName] = useState<{ id: string | null; initial: string } | null>(null);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     progress.value = withTiming(p.open ? 1 : 0, { duration: 300, easing: Easing.out(Easing.cubic) });
@@ -102,14 +119,33 @@ export function HistoryDrawer(p: Props) {
     const byId = new Map(p.conversations.map((c) => [c.id, c]));
     const out: Row[] = [];
     if (!q) {
+      const live = p.conversations.filter((c) => !c.archived);
+      const pinned = live.filter((c) => c.pinned);
+      if (pinned.length) {
+        out.push({ kind: 'header', key: 'h-pinned', label: 'Pinned' });
+        for (const c of pinned) out.push({ kind: 'chat', key: c.id, chat: c });
+      }
+      for (const f of p.folders) {
+        const inside = live.filter((c) => !c.pinned && c.folder_id === f.id);
+        const open = !collapsed[f.id];
+        out.push({ kind: 'folder', key: `f-${f.id}`, folder: f, count: inside.length, open });
+        if (open) for (const c of inside) out.push({ kind: 'chat', key: c.id, chat: c });
+      }
+      const known = new Set(p.folders.map((f) => f.id));
       let last = '';
-      for (const c of p.conversations) {
+      for (const c of live) {
+        if (c.pinned || (c.folder_id && known.has(c.folder_id))) continue;
         const label = dayLabel(c.updated_at);
         if (label !== last) {
           out.push({ kind: 'header', key: `h-${label}`, label });
           last = label;
         }
         out.push({ kind: 'chat', key: c.id, chat: c });
+      }
+      const archived = p.conversations.filter((c) => c.archived);
+      if (archived.length) {
+        out.push({ kind: 'toggle', key: 'arch', label: 'Archived', count: archived.length, open: showArchived });
+        if (showArchived) for (const c of archived) out.push({ kind: 'chat', key: c.id, chat: c });
       }
       return out;
     }
@@ -131,7 +167,7 @@ export function HistoryDrawer(p: Props) {
       out.push(...msgRows);
     }
     return out;
-  }, [p.conversations, query, hits]);
+  }, [p.conversations, p.folders, query, hits, collapsed, showArchived]);
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents={p.open ? 'auto' : 'none'}>
@@ -195,8 +231,48 @@ export function HistoryDrawer(p: Props) {
                   <Text style={styles.empty}>{query ? 'Nothing found.' : 'Your chats will appear here.'}</Text>
                 )
               }
+              ListHeaderComponent={
+                !query ? (
+                  <PressableScale onPress={() => setFolderName({ id: null, initial: '' })} haptic={false} style={styles.addFolder} label="New folder">
+                    <Ionicons name="folder-open-outline" size={16} color={colors.textDim} />
+                    <Text style={styles.addFolderText}>New folder</Text>
+                  </PressableScale>
+                ) : null
+              }
               renderItem={({ item, index }) => {
                 if (item.kind === 'header') return <Text style={styles.header}>{item.label}</Text>;
+                if (item.kind === 'toggle') {
+                  return (
+                    <PressableScale onPress={() => setShowArchived((v) => !v)} haptic={false} style={styles.folderRow} label="Show archived chats">
+                      <Ionicons name={item.open ? 'chevron-down' : 'chevron-forward'} size={15} color={colors.textFaint} />
+                      <Ionicons name="archive-outline" size={17} color={colors.textDim} />
+                      <Text style={styles.folderName}>{item.label}</Text>
+                      <Text style={styles.count}>{item.count}</Text>
+                    </PressableScale>
+                  );
+                }
+                if (item.kind === 'folder') {
+                  const f = item.folder;
+                  return (
+                    <PressableScale
+                      onPress={() => setCollapsed((c) => ({ ...c, [f.id]: !c[f.id] }))}
+                      onLongPress={() => setFolderMenu(f)}
+                      haptic={false}
+                      style={styles.folderRow}
+                      label={`Folder ${f.name}`}
+                    >
+                      <Ionicons name={item.open ? 'chevron-down' : 'chevron-forward'} size={15} color={colors.textFaint} />
+                      <Ionicons name="folder" size={18} color={f.color} />
+                      <Text numberOfLines={1} style={[styles.folderName, { flex: 1 }]}>
+                        {f.name}
+                      </Text>
+                      <Text style={styles.count}>{item.count}</Text>
+                      <PressableScale onPress={() => setFolderMenu(f)} label={`Options for folder ${f.name}`} hitSlop={10}>
+                        <Ionicons name="ellipsis-horizontal" size={16} color={colors.textFaint} />
+                      </PressableScale>
+                    </PressableScale>
+                  );
+                }
                 const c = item.chat;
                 const mode = getMode(c.mode);
                 const active = c.id === p.activeId;
@@ -209,7 +285,7 @@ export function HistoryDrawer(p: Props) {
                       haptic={false}
                       style={[styles.item, active && { backgroundColor: withAlpha(mode.color, 0.14) }]}
                     >
-                      <View style={[styles.itemDot, { backgroundColor: mode.color }]} />
+                      {c.pinned ? <Ionicons name="pin" size={13} color={mode.color} /> : <View style={[styles.itemDot, { backgroundColor: mode.color }]} />}
                       <View style={{ flex: 1 }}>
                         <Text numberOfLines={1} style={[styles.itemText, active && { color: colors.text }]}>
                           {c.title}
@@ -252,10 +328,70 @@ export function HistoryDrawer(p: Props) {
         visible={!!menuFor}
         title={menuFor?.title}
         onClose={() => setMenuFor(null)}
-        actions={[
-          { label: 'Rename', icon: 'create-outline', onPress: () => setRenaming(menuFor) },
-          { label: 'Delete chat', icon: 'trash-outline', destructive: true, onPress: () => menuFor && p.onDelete(menuFor.id) },
-        ]}
+        actions={
+          menuFor
+            ? [
+                { label: menuFor.pinned ? 'Unpin' : 'Pin to top', icon: menuFor.pinned ? 'pin-outline' : 'pin', onPress: () => p.onPin(menuFor.id, !menuFor.pinned) },
+                { label: 'Rename', icon: 'create-outline', onPress: () => setRenaming(menuFor) },
+                { label: 'Move to folder', icon: 'folder-outline', onPress: () => setMoveFor(menuFor) },
+                { label: 'Export chat', icon: 'share-outline', onPress: () => setExportFor(menuFor) },
+                { label: menuFor.archived ? 'Unarchive' : 'Archive', icon: 'archive-outline', onPress: () => p.onArchive(menuFor.id, !menuFor.archived) },
+                { label: 'Delete chat', icon: 'trash-outline', destructive: true, onPress: () => p.onDelete(menuFor.id) },
+              ]
+            : []
+        }
+      />
+      <ActionSheet
+        visible={!!moveFor}
+        title="Move to folder"
+        onClose={() => setMoveFor(null)}
+        actions={
+          moveFor
+            ? [
+                ...(moveFor.folder_id ? [{ label: 'No folder', icon: 'remove-circle-outline' as const, onPress: () => p.onMove(moveFor.id, null) }] : []),
+                ...p.folders.filter((f) => f.id !== moveFor.folder_id).map((f) => ({ label: f.name, icon: 'folder' as const, onPress: () => p.onMove(moveFor.id, f.id) })),
+                { label: 'New folder…', icon: 'add-circle-outline' as const, onPress: () => setFolderName({ id: null, initial: '' }) },
+              ]
+            : []
+        }
+      />
+      <ActionSheet
+        visible={!!exportFor}
+        title="Export chat"
+        onClose={() => setExportFor(null)}
+        actions={
+          exportFor
+            ? [
+                { label: 'PDF document', icon: 'document-text-outline', onPress: () => p.onExport(exportFor.id, 'pdf') },
+                { label: 'Markdown (.md)', icon: 'logo-markdown', onPress: () => p.onExport(exportFor.id, 'md') },
+                { label: 'Plain text (.txt)', icon: 'reader-outline', onPress: () => p.onExport(exportFor.id, 'txt') },
+              ]
+            : []
+        }
+      />
+      <ActionSheet
+        visible={!!folderMenu}
+        title={folderMenu?.name}
+        onClose={() => setFolderMenu(null)}
+        actions={
+          folderMenu
+            ? [
+                { label: 'Rename folder', icon: 'create-outline', onPress: () => setFolderName({ id: folderMenu.id, initial: folderMenu.name }) },
+                { label: 'Delete folder (chats are kept)', icon: 'trash-outline', destructive: true, onPress: () => p.onDeleteFolder(folderMenu.id) },
+              ]
+            : []
+        }
+      />
+      <RenameModal
+        visible={!!folderName}
+        title={folderName?.id ? 'Rename folder' : 'New folder'}
+        initial={folderName?.initial ?? ''}
+        onCancel={() => setFolderName(null)}
+        onSave={(name) => {
+          if (folderName?.id) p.onRenameFolder(folderName.id, name);
+          else p.onCreateFolder(name);
+          setFolderName(null);
+        }}
       />
       <RenameModal
         visible={!!renaming}
@@ -317,6 +453,11 @@ const make = (t: Theme) =>
       paddingHorizontal: 6,
     },
     item: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10, paddingVertical: 12, borderRadius: radius.md },
+    folderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8, paddingVertical: 11, marginTop: 6 },
+    folderName: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 14.5 },
+    count: { color: t.colors.textFaint, fontFamily: fonts.ui, fontSize: 12.5 },
+    addFolder: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8, paddingVertical: 8 },
+    addFolderText: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 13.5 },
     itemDot: { width: 8, height: 8, borderRadius: 4 },
     itemText: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 15 },
     snippet: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 12.5, marginTop: 2 },

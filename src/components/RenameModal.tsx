@@ -9,11 +9,13 @@ import { fonts, radius, Theme } from '../theme';
 export function RenameModal({
   visible,
   initial,
+  title = 'Rename chat',
   onCancel,
   onSave,
 }: {
   visible: boolean;
   initial: string;
+  title?: string;
   onCancel: () => void;
   onSave: (title: string) => void;
 }) {
@@ -33,7 +35,7 @@ export function RenameModal({
       </Animated.View>
       <KeyboardAvoidingView style={styles.center} behavior={Platform.OS === 'ios' ? 'padding' : undefined} pointerEvents="box-none">
         <Animated.View entering={ZoomIn.springify().damping(18)} style={styles.card}>
-          <Text style={styles.title}>Rename chat</Text>
+          <Text style={styles.title}>{title}</Text>
           <TextInput
             autoFocus
             value={value}

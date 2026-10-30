@@ -55,12 +55,34 @@ alter table public.conversations alter column mode set default 'founder';
 alter table public.messages add column if not exists attachments jsonb not null default '[]'::jsonb;
 alter table public.messages add column if not exists provider text;
 
+-- v1.2 upgrades: personalities, custom instructions, search sources, folders, pins, archive.
+alter table public.profiles add column if not exists custom_instructions text not null default '' check (char_length(custom_instructions) <= 1500);
+alter table public.profiles add column if not exists default_persona text not null default 'none';
+alter table public.profiles add column if not exists voice_reply boolean not null default true;
+alter table public.profiles add column if not exists voice_lang text not null default '';
+alter table public.conversations add column if not exists persona text not null default 'none';
+alter table public.conversations add column if not exists pinned boolean not null default false;
+alter table public.conversations add column if not exists archived boolean not null default false;
+alter table public.messages add column if not exists sources jsonb not null default '[]'::jsonb;
+alter table public.memories add column if not exists pinned boolean not null default false;
+
+create table if not exists public.folders (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade default auth.uid(),
+  name text not null check (char_length(name) between 1 and 40),
+  color text not null default '#3D8BFF',
+  created_at timestamptz not null default now()
+);
+alter table public.conversations add column if not exists folder_id uuid references public.folders(id) on delete set null;
+create index if not exists conversations_folder_idx on public.conversations(user_id, folder_id);
+
 -- ---------- Row Level Security: every user sees ONLY their own rows ----------
 
 alter table public.profiles enable row level security;
 alter table public.conversations enable row level security;
 alter table public.messages enable row level security;
 alter table public.memories enable row level security;
+alter table public.folders enable row level security;
 
 drop policy if exists "profiles own" on public.profiles;
 create policy "profiles own" on public.profiles
@@ -76,6 +98,10 @@ create policy "messages own" on public.messages
     user_id = auth.uid()
     and exists (select 1 from public.conversations c where c.id = conversation_id and c.user_id = auth.uid())
   );
+
+drop policy if exists "folders own" on public.folders;
+create policy "folders own" on public.folders
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 drop policy if exists "memories own" on public.memories;
 create policy "memories own" on public.memories

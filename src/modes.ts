@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react';
 import type { Ionicons } from '@expo/vector-icons';
-import type { ModeId } from './types';
+import type { ModeId, PersonaId } from './types';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -112,3 +112,17 @@ export const MODES: ModeInfo[] = [
 export function getMode(id: string | undefined | null): ModeInfo {
   return MODES.find((m) => m.id === id) ?? MODES[0];
 }
+
+export type PersonaInfo = { id: PersonaId; name: string; tagline: string; icon: IconName };
+
+/** Personalities change the voice of the answers; modes change the job. They combine freely. */
+export const PERSONAS: PersonaInfo[] = [
+  { id: 'none', name: 'Default', tagline: 'Turzam\'s natural voice', icon: 'sparkles' },
+  { id: 'professional', name: 'Professional', tagline: 'Polished, precise, formal-but-warm', icon: 'briefcase' },
+  { id: 'analyst', name: 'Analyst', tagline: 'Evidence, numbers and clear logic', icon: 'stats-chart' },
+  { id: 'creative', name: 'Creative', tagline: 'Bold, imaginative and original', icon: 'color-palette' },
+  { id: 'teacher', name: 'Teacher', tagline: 'Patient, step by step, with examples', icon: 'school' },
+  { id: 'entrepreneur', name: 'Entrepreneur', tagline: 'Fast, commercial, action-first', icon: 'trending-up' },
+];
+
+export const getPersona = (id?: PersonaId | null): PersonaInfo => PERSONAS.find((p) => p.id === id) ?? PERSONAS[0];

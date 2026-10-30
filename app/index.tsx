@@ -1,13 +1,17 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Speech from 'expo-speech';
 import { useFocusEffect, useRouter } from 'expo-router';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Aurora } from '../src/components/Aurora';
+import { ActionSheet } from '../src/components/ActionSheet';
 import { Composer } from '../src/components/Composer';
 import { FollowUps } from '../src/components/FollowUps';
 import { HistoryDrawer } from '../src/components/HistoryDrawer';
+import { ImageViewer } from '../src/components/ImageViewer';
+import { VoiceOverlay } from '../src/components/VoiceOverlay';
 import { Logo } from '../src/components/Logo';
 import { MessageBubble } from '../src/components/MessageBubble';
 import { ModeSheet } from '../src/components/ModeSheet';
@@ -20,7 +24,9 @@ import { useStyles, useTheme } from '../src/context/ThemeContext';
 import { useToast } from '../src/context/ToastContext';
 import { useChat } from '../src/hooks/useChat';
 import { useProviders } from '../src/hooks/useProviders';
-import { getMode } from '../src/modes';
+import { getMode, getPersona } from '../src/modes';
+import { exportChat, type ExportFormat } from '../src/lib/export';
+import { cleanForSpeech } from '../src/lib/speech';
 import { greeting } from '../src/lib/utils';
 import { fonts, radius, Theme, withAlpha } from '../src/theme';
 import type { ChatMessage } from '../src/types';
@@ -46,13 +52,17 @@ export default function ChatScreen() {
   const styles = useStyles(make);
   const toast = useToast();
   const { user, profile } = useAuth();
-  const chat = useChat();
-  const { providers } = useProviders();
+  const [answer, setAnswer] = useState<{ text: string; nonce: number } | null>(null);
+  const chat = useChat({ onAnswer: (text) => setAnswer({ text, nonce: Date.now() }) });
+  const { providers, caps } = useProviders();
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [viewImage, setViewImage] = useState<string | null>(null);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
   const [seed, setSeed] = useState(1);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const { syncList } = chat;
   useFocusEffect(
@@ -62,6 +72,26 @@ export default function ChatScreen() {
   );
 
   const mode = getMode(chat.mode);
+  const persona = getPersona(chat.persona);
+
+  async function doExport(id: string, format: ExportFormat) {
+    const title = chat.conversations.find((c) => c.id === id)?.title ?? 'Turzam chat';
+    toast.show('Preparing your file…', 'info');
+    try {
+      const rows = await chat.loadForExport(id);
+      await exportChat(title, rows, format);
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : 'Could not export this chat.', 'error');
+    }
+  }
+
+  async function speak(text: string) {
+    if (await Speech.isSpeakingAsync()) {
+      Speech.stop();
+      return;
+    }
+    Speech.speak(cleanForSpeech(text), { language: profile?.voice_lang || undefined });
+  }
   const name = profile?.display_name?.trim();
   const empty = chat.messages.length === 0 && !chat.loadingConv;
   const ideas = useMemo(() => pickFour(mode.suggestions, seed), [mode.suggestions, seed]);
@@ -71,9 +101,10 @@ export default function ChatScreen() {
 
   const renderItem = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => (
-      <MessageBubble message={item} isLast={index === 0} busy={chat.busy} accent={mode.color} onRegenerate={chat.regenerate} />
+      <MessageBubble message={item} isLast={index === 0} busy={chat.busy} accent={mode.color} onRegenerate={chat.regenerate} onSpeak={speak} onOpenImage={setViewImage} />
     ),
-    [chat.busy, chat.regenerate, mode.color],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chat.busy, chat.regenerate, mode.color, profile?.voice_lang],
   );
 
   const greetWords = [{ text: greeting() + (name ? ',' : '') }, ...(name ? [{ text: name, italic: true }] : [])];
@@ -96,19 +127,21 @@ export default function ChatScreen() {
           >
             <Ionicons name={mode.icon} size={16} color={mode.color} />
             <Text style={styles.modeText}>{mode.name}</Text>
-            <Text style={styles.modelText}>· {MODEL_LABEL[chat.model] ?? 'Auto'}</Text>
+            <Text style={styles.modelText}>· {chat.persona !== 'none' ? persona.name : MODEL_LABEL[chat.model] ?? 'Auto'}</Text>
+            {chat.searchOn && caps?.search ? <Ionicons name="globe" size={13} color={mode.color} /> : null}
             <Ionicons name="chevron-down" size={14} color={colors.textDim} />
           </PressableScale>
 
-          <PressableScale
-            onPress={() => {
-              chat.newChat();
-            }}
-            style={styles.roundBtn}
-            label="New chat"
-          >
-            <Ionicons name="create-outline" size={21} color={colors.text} />
-          </PressableScale>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {chat.activeId && chat.messages.length ? (
+              <PressableScale onPress={() => setExportOpen(true)} style={styles.roundBtn} label="Export this chat">
+                <Ionicons name="share-outline" size={20} color={colors.text} />
+              </PressableScale>
+            ) : null}
+            <PressableScale onPress={() => chat.newChat()} style={styles.roundBtn} label="New chat">
+              <Ionicons name="create-outline" size={21} color={colors.text} />
+            </PressableScale>
+          </View>
         </View>
 
         {/* Body */}
@@ -184,6 +217,16 @@ export default function ChatScreen() {
             onSend={chat.send}
             onStop={chat.stop}
             prefill={prefill}
+            onVoice={caps?.voiceInput === false ? () => toast.show('Voice input needs the Gemini key on the server.', 'info') : () => setVoiceOpen(true)}
+            searchOn={chat.searchOn && caps?.search === true}
+            onToggleSearch={() => {
+              if (caps?.search === false) {
+                toast.show('Web search needs the Gemini key on the server.', 'info');
+                return;
+              }
+              chat.setSearchOn(!chat.searchOn);
+              toast.show(chat.searchOn ? 'Web search off' : 'Web search on: answers will cite sources', 'info');
+            }}
           />
           <Text style={styles.disclaimer}>Turzam can make mistakes. Check important facts.</Text>
         </View>
@@ -193,6 +236,7 @@ export default function ChatScreen() {
         open={drawerOpen}
         loading={chat.listLoading}
         conversations={chat.conversations}
+        folders={chat.folders}
         activeId={chat.activeId}
         email={user?.email ?? ''}
         onClose={() => setDrawerOpen(false)}
@@ -212,6 +256,31 @@ export default function ChatScreen() {
           const ok = await chat.deleteConversation(id);
           toast.show(ok ? 'Chat deleted' : 'Could not delete the chat', ok ? 'success' : 'error');
         }}
+        onPin={async (id, pinned) => {
+          const ok = await chat.togglePin(id, pinned);
+          toast.show(ok ? (pinned ? 'Pinned' : 'Unpinned') : 'Could not update the chat', ok ? 'success' : 'error');
+        }}
+        onArchive={async (id, archived) => {
+          const ok = await chat.setArchived(id, archived);
+          toast.show(ok ? (archived ? 'Chat archived' : 'Chat restored') : 'Could not update the chat', ok ? 'success' : 'error');
+        }}
+        onMove={async (id, folderId) => {
+          const ok = await chat.moveToFolder(id, folderId);
+          toast.show(ok ? 'Chat moved' : 'Could not move the chat', ok ? 'success' : 'error');
+        }}
+        onExport={doExport}
+        onCreateFolder={async (name) => {
+          const f = await chat.createFolder(name, mode.color);
+          toast.show(f ? `Folder “${f.name}” created` : 'Could not create the folder', f ? 'success' : 'error');
+        }}
+        onRenameFolder={async (id, name) => {
+          const ok = await chat.renameFolder(id, name);
+          toast.show(ok ? 'Folder renamed' : 'Could not rename the folder', ok ? 'success' : 'error');
+        }}
+        onDeleteFolder={async (id) => {
+          const ok = await chat.deleteFolder(id);
+          toast.show(ok ? 'Folder deleted. Its chats are kept.' : 'Could not delete the folder', ok ? 'success' : 'error');
+        }}
         onSearchMessages={chat.searchMessages}
         onOpenMemory={() => {
           setDrawerOpen(false);
@@ -223,12 +292,45 @@ export default function ChatScreen() {
         }}
       />
 
+      <ActionSheet
+        visible={exportOpen}
+        title="Export this chat"
+        onClose={() => setExportOpen(false)}
+        actions={[
+          { label: 'PDF document', icon: 'document-text-outline', onPress: () => chat.activeId && doExport(chat.activeId, 'pdf') },
+          { label: 'Markdown (.md)', icon: 'logo-markdown', onPress: () => chat.activeId && doExport(chat.activeId, 'md') },
+          { label: 'Plain text (.txt)', icon: 'reader-outline', onPress: () => chat.activeId && doExport(chat.activeId, 'txt') },
+        ]}
+      />
+
+      <VoiceOverlay
+        visible={voiceOpen}
+        busy={chat.busy}
+        answer={answer}
+        lang={profile?.voice_lang || undefined}
+        speakReplies={profile?.voice_reply !== false}
+        accent={mode.color}
+        onUtterance={(t) => chat.send(t, [])}
+        onStopGenerating={chat.stop}
+        onClose={() => setVoiceOpen(false)}
+      />
+
+      <ImageViewer uri={viewImage} onClose={() => setViewImage(null)} />
+
       <ModeSheet
         visible={modeOpen}
         current={chat.mode}
         model={chat.model}
         providers={providers}
         onSelect={chat.setMode}
+        persona={chat.persona}
+        onSelectPersona={(p) => {
+          chat.setPersona(p);
+          toast.show(p === 'none' ? 'Default personality' : `${getPersona(p).name} personality`, 'info');
+        }}
+        searchOn={chat.searchOn}
+        searchAvailable={caps?.search !== false}
+        onToggleSearch={chat.setSearchOn}
         onSelectModel={(m) => {
           chat.setModel(m);
           toast.show(`Answers by ${MODEL_LABEL[m] ?? 'Auto'}`, 'info');

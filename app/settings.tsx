@@ -16,11 +16,23 @@ import { usePrefs, useStyles, useTheme } from '../src/context/ThemeContext';
 import { useToast } from '../src/context/ToastContext';
 import { useProviders } from '../src/hooks/useProviders';
 import { deleteAllChats } from '../src/lib/chats';
-import { MODES } from '../src/modes';
+import { MODES, PERSONAS } from '../src/modes';
 import { ACCENTS, fonts, radius, Scheme, Theme, withAlpha } from '../src/theme';
 import type { ModelChoice } from '../src/types';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
+
+const VOICE_LANGS: { id: string; label: string }[] = [
+  { id: '', label: 'Auto' },
+  { id: 'en-US', label: 'English' },
+  { id: 'ru-RU', label: 'Русский' },
+  { id: 'uz-UZ', label: "O'zbek" },
+  { id: 'es-ES', label: 'Español' },
+  { id: 'fr-FR', label: 'Français' },
+  { id: 'de-DE', label: 'Deutsch' },
+  { id: 'tr-TR', label: 'Türkçe' },
+  { id: 'ar-SA', label: 'العربية' },
+];
 
 const SCHEMES: { id: Scheme; label: string; icon: React.ComponentProps<typeof Ionicons>['name'] }[] = [
   { id: 'system', label: 'System', icon: 'phone-portrait-outline' },
@@ -67,6 +79,7 @@ export default function Settings() {
   const { user, profile, updateProfile, signOut } = useAuth();
   const { providers, error: providersError, refresh } = useProviders();
   const [name, setName] = useState(profile?.display_name ?? '');
+  const [instructions, setInstructions] = useState(profile?.custom_instructions ?? '');
 
   async function save(patch: Parameters<typeof updateProfile>[0], okText?: string) {
     const err = await updateProfile(patch);
@@ -222,6 +235,79 @@ export default function Settings() {
             </View>
             <Toggle value={prefs.followUps} onChange={setFollowUps} />
           </View>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(200).duration(300)} style={styles.card}>
+          <Text style={styles.label}>Custom instructions</Text>
+          <Text style={styles.hint}>
+            Tell Turzam how to answer you, every time. For example: "I run a 5-person design agency. Be brief and give me numbers."
+          </Text>
+          <TextInput
+            value={instructions}
+            onChangeText={setInstructions}
+            placeholder="How should Turzam answer you?"
+            placeholderTextColor={colors.textFaint}
+            selectionColor={colors.accent}
+            multiline
+            maxLength={1500}
+            style={[styles.input, { minHeight: 110, paddingTop: 12, textAlignVertical: 'top' }]}
+          />
+          <View style={styles.switchRow}>
+            <Text style={[styles.hint, { flex: 1 }]}>{instructions.length}/1500</Text>
+            <PressableScale
+              label="Save instructions"
+              disabled={instructions.trim() === (profile?.custom_instructions ?? '').trim()}
+              onPress={() => save({ custom_instructions: instructions.trim() }, instructions.trim() ? 'Instructions saved' : 'Instructions cleared')}
+              style={[styles.chip, { borderColor: colors.accent, backgroundColor: withAlpha(colors.accent, 0.16), opacity: instructions.trim() === (profile?.custom_instructions ?? '').trim() ? 0.45 : 1 }]}
+            >
+              <Text style={[styles.chipText, { color: colors.text }]}>Save</Text>
+            </PressableScale>
+          </View>
+          <Text style={[styles.label, { marginTop: 6 }]}>Default personality</Text>
+          <View style={styles.chips}>
+            {PERSONAS.map((p) => {
+              const on = (profile?.default_persona ?? 'none') === p.id;
+              return (
+                <PressableScale
+                  key={p.id}
+                  label={`${p.name} personality`}
+                  onPress={() => save({ default_persona: p.id })}
+                  style={[styles.chip, on && { borderColor: colors.accent, backgroundColor: withAlpha(colors.accent, 0.16) }]}
+                >
+                  <Ionicons name={p.icon} size={15} color={on ? colors.accentInk : colors.textDim} />
+                  <Text style={[styles.chipText, on && { color: colors.text }]}>{p.name}</Text>
+                </PressableScale>
+              );
+            })}
+          </View>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(220).duration(300)} style={styles.card}>
+          <Text style={styles.label}>Voice</Text>
+          <View style={styles.switchRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Speak answers aloud</Text>
+              <Text style={styles.hint}>In voice conversations Turzam reads its answers using your phone's built-in voice.</Text>
+            </View>
+            <Toggle value={profile?.voice_reply !== false} onChange={(v) => save({ voice_reply: v })} />
+          </View>
+          <Text style={[styles.label, { marginTop: 6 }]}>Voice language</Text>
+          <View style={styles.chips}>
+            {VOICE_LANGS.map((l) => {
+              const on = (profile?.voice_lang ?? '') === l.id;
+              return (
+                <PressableScale
+                  key={l.id || 'auto'}
+                  label={`Voice language ${l.label}`}
+                  onPress={() => save({ voice_lang: l.id })}
+                  style={[styles.chip, on && { borderColor: colors.accent, backgroundColor: withAlpha(colors.accent, 0.16) }]}
+                >
+                  <Text style={[styles.chipText, on && { color: colors.text }]}>{l.label}</Text>
+                </PressableScale>
+              );
+            })}
+          </View>
+          <Text style={styles.hint}>This sets the reading voice and helps with understanding your speech. Auto uses your phone's language.</Text>
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(240).duration(300)} style={styles.card}>

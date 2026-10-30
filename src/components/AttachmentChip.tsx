@@ -14,10 +14,12 @@ type Props = {
   /** Large thumbnail (used inside chat bubbles) vs. compact (composer). */
   large?: boolean;
   onRemove?: () => void;
+  /** Tap an image to open it full screen. */
+  onPress?: () => void;
 };
 
 /** One attached file: a picture thumbnail for images, an icon chip for PDFs and text files. */
-export function AttachmentChip({ name, mime, size, uri, large, onRemove }: Props) {
+export function AttachmentChip({ name, mime, size, uri, large, onRemove, onPress }: Props) {
   const { colors } = useTheme();
   const styles = useStyles(make);
   const kind = fileKind(mime, name);
@@ -26,7 +28,9 @@ export function AttachmentChip({ name, mime, size, uri, large, onRemove }: Props
     const dim = large ? 200 : 68;
     return (
       <View>
-        <Image source={{ uri }} style={{ width: dim, height: dim, borderRadius: radius.md, backgroundColor: colors.surfaceHi }} />
+        <PressableScale disabled={!onPress} onPress={onPress} scaleTo={0.97} label={`Open ${name}`}>
+          <Image source={{ uri }} style={{ width: dim, height: dim, borderRadius: radius.md, backgroundColor: colors.surfaceHi }} />
+        </PressableScale>
         {onRemove ? (
           <PressableScale label={`Remove ${name}`} style={styles.remove} onPress={onRemove}>
             <Ionicons name="close" size={14} color="#fff" />

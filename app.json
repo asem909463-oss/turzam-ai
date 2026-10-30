@@ -3,7 +3,7 @@
     "name": "Turzam AI",
     "slug": "turzam-ai",
     "scheme": "turzam",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -15,7 +15,10 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.turzam.ai"
+      "bundleIdentifier": "com.turzam.ai",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Turzam AI uses the microphone for voice conversations."
+      }
     },
     "android": {
       "package": "com.turzam.ai",
@@ -23,7 +26,10 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
-      }
+      },
+      "permissions": [
+        "RECORD_AUDIO"
+      ]
     },
     "plugins": [
       "expo-router",
@@ -33,6 +39,12 @@
         {
           "photosPermission": "Turzam AI needs your photos so you can send images to the assistant.",
           "cameraPermission": "Turzam AI needs the camera so you can take a photo and ask about it."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Turzam AI uses the microphone for voice conversations."
         }
       ]
     ],

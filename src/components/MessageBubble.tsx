@@ -13,6 +13,7 @@ import Animated, {
 import { AttachmentChip } from './AttachmentChip';
 import { Markdown } from './Markdown';
 import { PressableScale } from './PressableScale';
+import { Sources } from './Sources';
 import { StarSpinner } from './Logo';
 import { Thinking } from './Thinking';
 import { useToast } from '../context/ToastContext';
@@ -38,9 +39,12 @@ type Props = {
   busy: boolean;
   accent: string;
   onRegenerate: () => void;
+  onSpeak?: (text: string) => void;
+  onOpenImage?: (uri: string) => void;
+  onAnalyze?: (kind: string) => void;
 };
 
-function BubbleBase({ message, isLast, busy, accent, onRegenerate }: Props) {
+function BubbleBase({ message, isLast, busy, accent, onRegenerate, onSpeak, onOpenImage }: Props) {
   const styles = useStyles(make);
   const { colors } = useTheme();
   const toast = useToast();
@@ -66,7 +70,7 @@ function BubbleBase({ message, isLast, busy, accent, onRegenerate }: Props) {
           {atts.length ? (
             <View style={styles.attRow}>
               {atts.map((a) => (
-                <AttachmentChip key={a.id} name={a.name} mime={a.mime} size={a.size} uri={a.uri} large />
+                <AttachmentChip key={a.id} name={a.name} mime={a.mime} size={a.size} uri={a.uri} large onPress={a.uri && a.mime.startsWith('image/') && onOpenImage ? () => onOpenImage(a.uri as string) : undefined} />
               ))}
             </View>
           ) : null}
@@ -90,6 +94,9 @@ function BubbleBase({ message, isLast, busy, accent, onRegenerate }: Props) {
       <View style={{ flex: 1 }}>
         {waiting ? <Thinking label={message.working} /> : <Markdown text={message.content} />}
         {message.streaming && message.content ? <Caret /> : null}
+        {message.sources?.length ? <Sources sources={message.sources} /> : message.searched && !message.streaming && message.content ? (
+          <Text style={styles.noSrc}>Searched the web, but no sources were returned.</Text>
+        ) : null}
         {message.error ? (
           <View style={styles.errorBox}>
             <Ionicons name="alert-circle" size={16} color={colors.danger} />
@@ -101,6 +108,11 @@ function BubbleBase({ message, isLast, busy, accent, onRegenerate }: Props) {
             {message.content ? (
               <PressableScale label="Copy answer" style={styles.actionBtn} onPress={() => copy(message.content)}>
                 <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={16} color={copied ? colors.success : colors.textDim} />
+              </PressableScale>
+            ) : null}
+            {onSpeak && message.content ? (
+              <PressableScale label="Read answer aloud" style={styles.actionBtn} onPress={() => onSpeak(message.content)}>
+                <Ionicons name="volume-high-outline" size={17} color={colors.textDim} />
               </PressableScale>
             ) : null}
             {isLast && !busy ? (
@@ -157,6 +169,7 @@ const make = (t: Theme) =>
       borderWidth: 1,
       borderColor: t.colors.border,
     },
+    noSrc: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 12, marginTop: 8 },
     provider: { color: t.colors.textFaint, fontFamily: fonts.ui, fontSize: 12, marginLeft: 6 },
     errorBox: {
       flexDirection: 'row',

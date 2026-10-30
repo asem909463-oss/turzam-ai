@@ -6,9 +6,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PressableScale } from './PressableScale';
 import { useToast } from '../context/ToastContext';
 import { useStyles, useTheme } from '../context/ThemeContext';
-import { MODES } from '../modes';
+import { MODES, PERSONAS } from '../modes';
 import { fonts, radius, Theme, withAlpha } from '../theme';
-import type { ModeId, ModelChoice, ProviderInfo } from '../types';
+import { Toggle } from './Toggle';
+import type { ModeId, ModelChoice, PersonaId, ProviderInfo } from '../types';
 
 type Props = {
   visible: boolean;
@@ -17,10 +18,15 @@ type Props = {
   providers: ProviderInfo[] | null;
   onSelect: (m: ModeId) => void;
   onSelectModel: (m: ModelChoice) => void;
+  persona: PersonaId;
+  onSelectPersona: (p: PersonaId) => void;
+  searchOn: boolean;
+  searchAvailable: boolean;
+  onToggleSearch: (v: boolean) => void;
   onClose: () => void;
 };
 
-export function ModeSheet({ visible, current, model, providers, onSelect, onSelectModel, onClose }: Props) {
+export function ModeSheet({ visible, current, model, providers, onSelect, onSelectModel, persona, onSelectPersona, searchOn, searchAvailable, onToggleSearch, onClose }: Props) {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const styles = useStyles(make);
@@ -77,6 +83,46 @@ export function ModeSheet({ visible, current, model, providers, onSelect, onSele
                 </Animated.View>
               );
             })}
+
+            <Text style={[styles.title, { fontSize: 22, marginTop: 10 }]}>Personality</Text>
+            <View style={styles.chips}>
+              {PERSONAS.map((p) => {
+                const on = p.id === persona;
+                return (
+                  <PressableScale
+                    key={p.id}
+                    label={`${p.name} personality`}
+                    scaleTo={0.94}
+                    style={[styles.chip, on && { borderColor: colors.accent, backgroundColor: withAlpha(colors.accent, 0.14) }]}
+                    onPress={() => onSelectPersona(p.id)}
+                  >
+                    <Ionicons name={p.icon} size={14} color={on ? colors.accentInk : colors.textFaint} />
+                    <Text style={[styles.chipText, on && { color: colors.text }]}>{p.name}</Text>
+                  </PressableScale>
+                );
+              })}
+            </View>
+            <Text style={styles.note}>{PERSONAS.find((p) => p.id === persona)?.tagline}</Text>
+
+            <Text style={[styles.title, { fontSize: 22, marginTop: 10 }]}>Web search</Text>
+            <View style={[styles.row, { justifyContent: 'space-between' }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.name}>Search the web</Text>
+                <Text style={styles.tag}>
+                  {searchAvailable ? 'Answers with live sources you can open' : 'Needs the Gemini key on the server'}
+                </Text>
+              </View>
+              <Toggle
+                value={searchOn && searchAvailable}
+                onChange={(v) => {
+                  if (!searchAvailable) {
+                    toast.show('Web search needs the Gemini key on the server.', 'info');
+                    return;
+                  }
+                  onToggleSearch(v);
+                }}
+              />
+            </View>
 
             <Text style={[styles.title, { fontSize: 22, marginTop: 10 }]}>Which AI answers?</Text>
             <View style={styles.chips}>

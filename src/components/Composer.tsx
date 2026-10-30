@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   FadeIn,
@@ -28,9 +28,14 @@ type Props = {
   onStop: () => void;
   /** Set this to put text into the box (used by the suggestion cards). */
   prefill?: { text: string; nonce: number } | null;
+  /** Opens the voice conversation. */
+  onVoice?: () => void;
+  /** Web search is on for the next answer. */
+  searchOn?: boolean;
+  onToggleSearch?: () => void;
 };
 
-export function Composer({ busy, accent, placeholder, onSend, onStop, prefill }: Props) {
+export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, onVoice, searchOn, onToggleSearch }: Props) {
   const { colors } = useTheme();
   const styles = useStyles(make);
   const toast = useToast();
@@ -47,6 +52,14 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill }:
     }
   }, [prefill]);
 
+  const hasImage = files.some((f) => f.mime.startsWith('image/'));
+  const lenses: { label: string; icon: React.ComponentProps<typeof Ionicons>['name']; prompt: string }[] = [
+    { label: 'Describe', icon: 'eye-outline', prompt: 'Describe this image in detail: what it shows, the key objects and context.' },
+    { label: 'Extract text', icon: 'text-outline', prompt: 'Extract all the text in this image exactly as written, keeping the structure.' },
+    { label: 'Explain chart', icon: 'bar-chart-outline', prompt: 'Explain this chart: what it measures, the key numbers, the trend, and what I should conclude.' },
+    { label: 'Review design', icon: 'color-palette-outline', prompt: 'Review this design or screenshot like a senior designer: what works, what does not, and the 5 most important fixes.' },
+    { label: 'Compare', icon: 'git-compare-outline', prompt: 'Compare these images: key differences and similarities, and which is better for my goal.' },
+  ];
   const canSend = !busy && (text.trim().length > 0 || files.length > 0);
   const ready = useSharedValue(0);
   useEffect(() => {
@@ -104,6 +117,21 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill }:
         </Animated.View>
       ) : null}
 
+      {hasImage && !text.trim() ? (
+        <Animated.View entering={FadeIn.duration(200)}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.lensRow} keyboardShouldPersistTaps="handled">
+            {lenses
+              .filter((l) => l.label !== 'Compare' || files.filter((f) => f.mime.startsWith('image/')).length > 1)
+              .map((l) => (
+                <PressableScale key={l.label} label={l.label} scaleTo={0.94} style={styles.lens} onPress={() => setText(l.prompt)}>
+                  <Ionicons name={l.icon} size={14} color={accent} />
+                  <Text style={styles.lensText}>{l.label}</Text>
+                </PressableScale>
+              ))}
+          </ScrollView>
+        </Animated.View>
+      ) : null}
+
       <Animated.View style={[styles.box, box]}>
         <PressableScale
           label={`Attach files (${files.length}/${MAX_FILES})`}
@@ -128,6 +156,21 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill }:
           style={styles.input}
         />
 
+        {onToggleSearch ? (
+          <PressableScale
+            label={searchOn ? 'Turn web search off' : 'Turn web search on'}
+            onPress={onToggleSearch}
+            style={[styles.attach, searchOn && { backgroundColor: withAlpha(accent, 0.2), borderRadius: 20 }]}
+          >
+            <Ionicons name="globe-outline" size={21} color={searchOn ? accent : colors.textDim} />
+          </PressableScale>
+        ) : null}
+
+        {onVoice && !busy && !canSend ? (
+          <PressableScale label="Voice conversation" onPress={onVoice} style={[styles.send, { backgroundColor: withAlpha(accent, 0.18) }]}>
+            <Ionicons name="mic" size={20} color={accent} />
+          </PressableScale>
+        ) : (
         <Animated.View style={sendStyle}>
           {busy ? (
             <Animated.View key="stop" entering={FadeIn.duration(150)} exiting={FadeOut.duration(100)}>
@@ -148,6 +191,7 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill }:
             </Animated.View>
           )}
         </Animated.View>
+        )}
       </Animated.View>
 
       <ActionSheet
@@ -168,6 +212,9 @@ const make = (t: Theme) =>
   StyleSheet.create({
     wrap: { paddingHorizontal: 12, paddingTop: 6, gap: 10, width: '100%', maxWidth: 760, alignSelf: 'center' },
     previewRow: { gap: 10, paddingLeft: 6, paddingRight: 6, paddingTop: 8, alignItems: 'center' },
+    lensRow: { gap: 8, paddingHorizontal: 6 },
+    lens: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: 17, borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.surface },
+    lensText: { color: t.colors.text, fontFamily: fonts.ui, fontSize: 13 },
     box: {
       flexDirection: 'row',
       alignItems: 'flex-end',
