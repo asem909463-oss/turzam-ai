@@ -11,6 +11,8 @@ expo-env.d.ts
 .env.local
 .env.*.local
 supabase/.env
+supabase/.env.*
+!supabase/.env.example
 supabase/.temp/
 
 # Native build output

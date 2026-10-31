@@ -20,9 +20,15 @@ jobs:
       - name: Type-check the app
         run: npm run typecheck
       - name: Dependencies pinned and lockfile present
-        # Turn this into a hard failure (remove continue-on-error) once you have committed the lockfile.
-        run: npm run check:pinned
-        continue-on-error: true
+        # Mandatory as soon as package-lock.json exists. Until then it only warns (see README, "Pin versions").
+        run: |
+          if [ -f package-lock.json ]; then
+            npm run check:pinned
+          else
+            echo "::warning::No package-lock.json yet, so pinning is not enforced. See README, 'Pin versions'."
+          fi
+      - name: No secrets in the repository
+        run: npm run check:secrets
 
   edge:
     name: Supabase Edge Functions
@@ -41,3 +47,23 @@ jobs:
         run: deno check supabase/functions/chat/index.ts supabase/functions/delete-account/index.ts
       - name: Lint the functions
         run: deno lint supabase/functions
+
+  quota:
+    name: Usage limits under concurrency (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the concurrency test
+        run: bash supabase/tests/quota_concurrency.sh

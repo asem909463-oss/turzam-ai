@@ -31,9 +31,16 @@ React Native + Expo + TypeScript app for iOS and Android. Supabase handles login
 | **Gemini API key** (required) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
 | OpenAI key (optional, enables ChatGPT) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
 | Anthropic key (optional, enables Claude) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
-| Supabase **service_role** key | **Nowhere.** Turzam never needs it. | Never |
+| Supabase **service_role** key | **You never paste it anywhere**: not in `.env`, not in `supabase/.env`, not in GitHub, not in the app. Supabase hands it to the `delete-account` function by itself while it runs (as `SUPABASE_SERVICE_ROLE_KEY`), and only that one function uses it, only to delete a user's files and account after the user confirms with their password. The chat function never sees it. | Never |
 
-`.env` and `supabase/.env` are in `.gitignore`, so GitHub never sees them.
+**Only two places ever hold keys on your computer:**
+
+| File | Holds | Created with |
+|---|---|---|
+| `.env` (project folder) | `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY` | `copy .env.example .env` |
+| `supabase/.env` | `GEMINI_API_KEY` (required), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (optional), optional limit settings | `copy supabase\.env.example supabase\.env` |
+
+Both are in `.gitignore`, so GitHub never sees them. After filling them in, run `npm run check:env`: it tells you exactly what is missing or in the wrong file (for example an AI key pasted into `.env`, or the service-role key used by mistake) and never prints a secret. `npm run check:secrets` scans the files git tracks for keys, and CI runs it on every push.
 
 ## Setup (about 20 minutes)
 
@@ -49,21 +56,24 @@ npx expo install --fix
 1. In Supabase click **New project** and wait until it is ready.
 2. Open **SQL Editor → New query**, paste everything from `supabase/schema.sql`, click **Run**.
    Already ran an older version? Run it again. It is safe to repeat and adds the new columns and the file storage.
-3. Optional, easier testing: **Authentication → Providers → Email** and turn **Confirm email** off.
+3. Only while developing: **Authentication → Providers → Email**, turn **Confirm email** off so test accounts can sign in at once. Turn it back **on** before real users arrive (see "Development vs production" below).
 
 **3. Put the Supabase keys in `.env`**
 ```powershell
 copy .env.example .env
 notepad .env
 ```
-Paste the **Project URL** and **anon public** key from Supabase → **Project Settings → API**. Save.
+Paste the **Project URL** and **anon public** key from Supabase → **Project Settings → API**. Save. (Never the `service_role` key.)
 
 **4. Put the AI key(s) in `supabase/.env`**
 ```powershell
 copy supabase\.env.example supabase\.env
 notepad supabase\.env
 ```
-Replace `PASTE-YOUR-GEMINI-API-KEY-HERE` with your Gemini key. To turn on ChatGPT or Claude, remove the `#` in front of its line and paste the key. Save.
+Replace `PASTE-YOUR-GEMINI-API-KEY-HERE` with your Gemini key. To turn on ChatGPT or Claude, remove the `#` in front of its line and paste the key. Save. Then check both files:
+```powershell
+npm run check:env
+```
 
 **5. Upload the keys and the backend to Supabase**
 Your project ref is the part of your Supabase URL before `.supabase.co`.
@@ -112,6 +122,60 @@ Search and voice input are **Gemini only**. If you only connect ChatGPT or Claud
 
 **After updating:** run the new `supabase/schema.sql` again first (it adds project tables, usage limits and folders without deleting existing data), then redeploy with `npx supabase functions deploy chat` and `npx supabase functions deploy delete-account`, then run `npm install` and `npx expo install --fix`. Voice, export and store reviews use Expo native modules; microphone permission text is set in `app.json`, so rebuild if you use a custom build.
 
+## Development vs production settings
+
+| Setting | While you develop | Before real users |
+|---|---|---|
+| **Confirm email** (Supabase → Authentication → Providers → Email) | **Off** is fine: test accounts sign in immediately | **On**, so nobody can sign up with someone else's address |
+| **Email sending** (Authentication → SMTP) | Supabase's built-in mailer is fine; it only sends a few emails per hour | Set your **own SMTP provider**; the built-in one is not meant for production |
+| **CAPTCHA** (Authentication → Attack Protection) | Off | **On** (hCaptcha or Turnstile) to slow down fake accounts |
+| **Total daily caps** (`GLOBAL_CHAT_PER_DAY`, `GLOBAL_SEARCH_PER_DAY`, `GLOBAL_TRANSCRIBE_PER_DAY` in `supabase/.env`) | Not needed | **Set them**: a hard stop for the whole app, whatever accounts exist |
+| **Per-user limits** (`LIMIT_*`) | Defaults | Review them against your AI budget |
+| **Gemini key** | Any key | A key with a **spending cap** in Google AI Studio / Cloud billing |
+| **Site URL and redirect URLs** (Authentication → URL Configuration) | Expo Go URLs | Your real app scheme (`turzam://`) |
+| **Bundle id** (`app.json`) | `com.turzam.ai` | Your own id |
+
+If you change `supabase/.env`, run `npx supabase secrets set --env-file supabase/.env` again.
+
+## Limits, costs and safety (v1.3)
+
+All of this is enforced **on the server**, so a modified app cannot get around it.
+
+- **Per-user rate limits** (counted in the database, function `consume_quota`): chat 12 per minute and 150 per day, web search 6 per minute and 40 per day, titles/memory/ideas 30 per minute and 400 per day, voice 10 per minute and 100 per day. Change them with `LIMIT_CHAT_PER_DAY` and similar secrets (see `supabase/.env.example`). When a limit is hit the app shows a friendly message. If you forget to run the new `schema.sql`, the server refuses requests instead of running without limits.
+- **Total daily cap (optional):** `GLOBAL_CHAT_PER_DAY` and similar secrets stop the whole app at a daily number of calls, whoever makes them. Off until you set it. The check-then-count runs under a database lock per action type, so many users hitting it in the same instant cannot push it past the cap (proved by `npm run test:quota`).
+- **Input checks:** messages up to 12,000 characters, at most 40 messages and 120,000 characters of history per request, unknown modes/personalities ignored, malformed files dropped.
+- **Answer size:** `MAX_OUTPUT_TOKENS` (default 4096). Gemini 3.x counts its thinking in the same limit, so the server adds room for it. Gemini thinking defaults to `low` (cheapest); set `GEMINI_THINKING_LEVEL=medium` for better answers at higher cost. Gemini 3.x is run at its default temperature, as Google recommends.
+- **Stop really stops:** when you press Stop (or the connection drops) the server cancels the request to the AI provider, so it stops generating and billing. Titles, memory and follow-up ideas are skipped for stopped answers.
+- **Timeouts:** 30 s for the AI to start, 45 s of silence, 2 minutes total. Temporary errors (429/5xx) are retried once.
+- **Auto mode:** tries each connected AI in order and moves on to the next if one fails before answering. If you pick a specific AI, the app does not switch silently; it tells you what went wrong. Provider error details stay in the server log, not in the app.
+- **Files:** 4 per message, 10 MB each, 18 MB per message, everywhere (app, server and storage bucket). Deleting a chat or all chats removes every file (all pages, including files whose chat is gone); if files cannot be removed the chat is kept so you can retry. A failed upload removes the files that already went up.
+- **Delete account** (Settings): asks for the word DELETE and your password, checks the password on the server, removes all files, then deletes the account; chats, memories, folders and usage records go with it. Limited to 3 attempts per minute.
+
+## Checks for developers
+
+```powershell
+npm run check          # type-check the app + run the Edge Function tests
+npm run check:edge     # type-check and lint the Edge Functions (needs Deno: https://deno.com)
+npm run check:pinned   # fails if a dependency is not pinned or there is no lockfile
+npm run check:env      # are .env and supabase/.env filled in correctly (prints no secrets)
+npm run check:secrets  # scans the files git tracks for keys
+npm run test:quota     # usage limits under simultaneous users (needs PostgreSQL, see the script header)
+```
+`.github/workflows/ci.yml` runs them on every push to GitHub. The pinned-versions check becomes **mandatory** (a failing build) as soon as `package-lock.json` exists in the repository.
+
+### Pin versions and create the lockfile (do this once)
+
+Packages are currently listed as `*` (any version), and there is no `package-lock.json` yet because the environment this code was written in could not reach the npm registry. Run these on your computer, one at a time, then commit the two files:
+```powershell
+npm install
+npx expo install --fix
+npm run pin
+git add package.json package-lock.json
+git commit -m "Pin dependencies and add lockfile"
+git push
+```
+`npm run pin` replaces every `*` in `package.json` with the exact version that was installed. After that, use `npm ci` for clean installs, and `npx expo install <package>` to add packages.
+
 ## Attachments
 
 Up to 4 files per message, 10 MB each (18 MB per message). Photos are sent at high quality and you can pick several at once. Supported: images, PDF, and text-like files (txt, md, csv, json, xml, html, code). Word and Excel files are not supported yet; export them to PDF or CSV first.
@@ -124,7 +188,8 @@ Up to 4 files per message, 10 MB each (18 MB per message). Photos are sent at hi
 - **"...returned an error (4xx)"**: check that provider's key and model name in `supabase/.env`, then redo `secrets set`.
 - **"Could not save" in Settings, or file upload fails**: run the latest `supabase/schema.sql` (Step 2).
 - **ChatGPT or Claude shows "Not connected"**: its key is not set on the server yet (Step 4 and 5).
-- **Cannot sign in right after sign-up**: confirm the email, or turn off **Confirm email** (Step 2.3).
+- **Cannot sign in right after sign-up**: confirm the email. During development only, you can turn off **Confirm email** (Step 2.3).
+- **Not sure the key files are right**: run `npm run check:env`.
 - **Phone cannot find the app**: phone and computer must be on the same Wi‑Fi. Otherwise run `npx expo start --tunnel`.
 
 ## Publishing to the stores

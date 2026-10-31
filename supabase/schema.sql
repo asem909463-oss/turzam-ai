@@ -265,7 +265,11 @@ begin
   end if;
 
   -- Optional cap across ALL users (protects the AI bill from many accounts). NULL = off.
+  -- Without a lock, many users checking at the same moment would all see "under the cap" and all insert.
+  -- This transaction-level lock (one per action type, released automatically at commit) makes the
+  -- count-then-insert below happen one caller at a time. Lock order is always user lock, then global lock.
   if p_global_per_day is not null then
+    perform pg_advisory_xact_lock(hashtextextended('global:' || p_kind, 0));
     select count(*) into n_all from public.usage_events where kind = p_kind and created_at > now() - interval '1 day';
     if n_all >= p_global_per_day then
       return jsonb_build_object('ok', false, 'reason', 'global', 'retry_after', 300);

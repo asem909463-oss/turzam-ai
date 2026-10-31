@@ -12,7 +12,10 @@
     "check:edge": "deno check supabase/functions/chat/index.ts supabase/functions/delete-account/index.ts && deno lint supabase/functions",
     "check": "npm run typecheck && npm run test:edge",
     "pin": "node scripts/pin-deps.mjs",
-    "check:pinned": "node scripts/pin-deps.mjs --check"
+    "check:pinned": "node scripts/pin-deps.mjs --check",
+    "check:env": "node scripts/check-env.mjs",
+    "check:secrets": "node scripts/check-env.mjs --secrets",
+    "test:quota": "bash supabase/tests/quota_concurrency.sh"
   },
   "dependencies": {
     "@expo-google-fonts/instrument-serif": "*",
