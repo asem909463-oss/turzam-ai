@@ -9,9 +9,8 @@
 //      (verified against Supabase Auth); Google / Apple accounts have no password, so they must have
 //      signed in within the last 10 minutes. A stolen or left-open session cannot erase an account.
 //   3. At most 3 attempts per minute and 5 per day (consume_quota).
-//   4. All of the user's files are removed first; if that fails nothing else is deleted, so they can retry.
-//   5. The auth user is deleted last. Database rows (profile, chats, messages, memories, folders, usage)
-//      are removed by "on delete cascade" in schema.sql.
+//   4. A service-only recovery row is written before cleanup. Storage deletion is idempotent and can be retried.
+//   5. The auth user is deleted last. Database rows are removed by cascade; on failure the account stays active.
 
 import { createClient } from "@supabase/supabase-js";
 import { deleteProof, globalPerDay, quotaFor, readJsonLimited } from "../_shared/limits.ts";
@@ -46,6 +45,17 @@ async function removeFolder(admin: any, prefix: string): Promise<void> {
     }
   }
   throw new Error("too many files to remove in one go");
+}
+
+// Recovery rows contain only a stage and a fixed error code, never passwords or provider credentials.
+// deno-lint-ignore no-explicit-any
+async function updateDeletionJob(admin: any, userId: string, stage: "storage" | "database", lastError: string | null) {
+  const { error } = await admin.from("account_deletion_jobs").update({
+    stage,
+    last_error: lastError,
+    updated_at: new Date().toISOString(),
+  }).eq("user_id", userId);
+  if (error) throw error;
 }
 
 Deno.serve(async (req) => {
@@ -107,16 +117,46 @@ Deno.serve(async (req) => {
     if (pwError) return json({ error: "That password is not correct." }, 403);
   }
 
+  // Fail closed before deleting anything if the recovery record cannot be persisted.
+  const { error: jobError } = await admin.from("account_deletion_jobs").upsert({
+    user_id: user.id,
+    stage: "storage",
+    last_error: null,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "user_id" });
+  if (jobError) {
+    console.error("account deletion recovery record failed", jobError.message);
+    return json({ error: "Deletion could not be started safely. Your account is unchanged; please try again later." }, 500);
+  }
+
   try {
     await removeFolder(admin, user.id);
   } catch (e) {
     console.error("account files removal failed", String(e));
-    return json({ error: "Could not remove your files. Nothing else was deleted. Please try again." }, 500);
+    await updateDeletionJob(admin, user.id, "storage", "storage_cleanup_failed").catch((jobUpdateError) => {
+      console.error("account deletion recovery update failed", String(jobUpdateError));
+    });
+    return json({ error: "Some files could not be removed. Your account is still active; safely retry deletion from Settings. Files already removed will be skipped." }, 500);
   }
+
+  try {
+    await updateDeletionJob(admin, user.id, "database", null);
+  } catch (e) {
+    console.error("account deletion stage update failed", String(e));
+    return json({ error: "Files are cleaned, but account deletion has not started. Your account is still active; retry from Settings." }, 500);
+  }
+
   const { error: delError } = await admin.auth.admin.deleteUser(user.id);
   if (delError) {
     console.error("deleteUser failed", delError.message);
-    return json({ error: "Could not delete the account. Please try again." }, 500);
+    await updateDeletionJob(admin, user.id, "database", "auth_delete_failed").catch((jobUpdateError) => {
+      console.error("account deletion recovery update failed", String(jobUpdateError));
+    });
+    return json({ error: "Your files are cleaned, but account-data deletion failed. Your account is still active; safely retry from Settings." }, 500);
   }
+  // Auth deletion and its database cascades succeeded. Failure to remove this non-user-facing
+  // bookkeeping row cannot undo deletion; it is safe for an administrator to clean up later.
+  const { error: jobCleanupError } = await admin.from("account_deletion_jobs").delete().eq("user_id", user.id);
+  if (jobCleanupError) console.error("completed account deletion recovery record cleanup failed", jobCleanupError.message);
   return json({ deleted: true });
 });
