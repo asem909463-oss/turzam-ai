@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usePrefs } from '../context/ThemeContext';
-import { fileKind, purgeConversationFiles, uploadAttachment } from '../lib/attachments';
+import { fileKind, purgeAttachmentPaths, purgeConversationFiles, uploadAttachment } from '../lib/attachments';
 import { supabase } from '../lib/supabase';
 import { ApiMessage, callFunction, streamChat } from '../lib/stream';
 import { uuid } from '../lib/utils';
@@ -61,6 +61,7 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
   const [persona, setPersonaState] = useState<PersonaId>('none');
   const [searchOn, setSearchOnState] = useState(false);
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [projectId, setProjectIdState] = useState<string | null>(null);
 
   // Refs hold the "latest" values so async code never reads stale state.
   const activeRef = useRef<string | null>(null);
@@ -69,6 +70,7 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
   const modelRef = useRef<ModelChoice>('auto');
   const personaRef = useRef<PersonaId>('none');
   const searchRef = useRef(false);
+  const projectRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const memoryOnRef = useRef(true);
   const followRef = useRef(true);
@@ -106,7 +108,7 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
   const loadConversations = useCallback(async (): Promise<Conversation[]> => {
     const { data } = await supabase
       .from('conversations')
-      .select('id,title,mode,model,persona,pinned,archived,folder_id,updated_at')
+      .select('id,title,mode,model,persona,pinned,archived,folder_id,project_id,updated_at')
       .order('updated_at', { ascending: false })
       .limit(300);
     const list = (data ?? []) as Conversation[];
@@ -133,9 +135,11 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
     abortRef.current?.abort();
   }, []);
 
-  const newChat = useCallback(() => {
+  const newChat = useCallback((nextProjectId: string | null = null) => {
     abortRef.current?.abort();
     activeRef.current = null;
+    projectRef.current = nextProjectId;
+    setProjectIdState(nextProjectId);
     setActiveId(null);
     setMessages([]);
     setSuggestions([]);
@@ -199,7 +203,9 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
     setSuggestions([]);
     setLoadingConv(true);
     try {
-      const { data: convo } = await supabase.from('conversations').select('mode,model,persona').eq('id', id).maybeSingle();
+      const { data: convo } = await supabase.from('conversations').select('mode,model,persona,project_id').eq('id', id).maybeSingle();
+      projectRef.current = convo?.project_id ?? null;
+      setProjectIdState(projectRef.current);
       if (convo?.mode) {
         modeRef.current = convo.mode as ModeId;
         setModeState(convo.mode as ModeId);
@@ -256,7 +262,7 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
 
   /** Streams one answer into the message `modelId`, then saves it. */
   const runStream = useCallback(
-    async (convId: string, history: ApiMessage[], modelId: string, extra?: { title: boolean; userText: string }) => {
+    async (convId: string, history: ApiMessage[], modelId: string, extra?: { title: boolean; userText: string }, conversationProjectId: string | null = projectRef.current) => {
       const ctrl = new AbortController();
       abortRef.current = ctrl;
       let acc = '';
@@ -283,6 +289,7 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
           provider: modelRef.current,
           persona: personaRef.current,
           search: searchRef.current,
+          projectId: conversationProjectId ?? undefined,
           messages: history,
           signal: ctrl.signal,
           onSources: (list) => {
@@ -379,13 +386,15 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
         streaming: true,
         working: files.length ? 'Reading your files' : undefined,
       };
+      let pendingUserId: string | null = null;
+      let userMessageSaved = false;
 
       try {
         if (!convId) {
           const { data, error } = await supabase
             .from('conversations')
-            .insert({ mode: modeRef.current, model: modelRef.current, persona: personaRef.current, title: trimmed.slice(0, 40) || files[0]?.name || 'New chat' })
-            .select('id,title,mode,model,persona,pinned,archived,folder_id,updated_at')
+            .insert({ mode: modeRef.current, model: modelRef.current, persona: personaRef.current, project_id: projectRef.current, title: trimmed.slice(0, 40) || files[0]?.name || 'New chat' })
+            .select('id,title,mode,model,persona,pinned,archived,folder_id,project_id,updated_at')
             .single();
           if (error || !data) throw new Error(error?.message ?? 'Could not start a chat.');
           convId = data.id as string;
@@ -405,13 +414,19 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
           path: null,
         }));
         const userMsg: ChatMessage = { id: uuid(), role: 'user', content: trimmed, attachments: localAtts };
+        pendingUserId = userMsg.id;
 
         // Show the message straight away, then upload the files.
         setMessages((prev) => [...prev, userMsg, modelMsg]);
 
-        let attachments: Attachment[] = [];
+        const attachments: Attachment[] = [];
         if (files.length) {
-          attachments = await Promise.all(files.map((f) => uploadAttachment(userId, convId as string, f)));
+          try {
+            for (const file of files) attachments.push(await uploadAttachment(userId, convId as string, file));
+          } catch (e) {
+            await purgeAttachmentPaths(attachments.map((attachment) => attachment.path ?? '')).catch(() => {});
+            throw e;
+          }
           userMsg.attachments = attachments;
           patchMessage(userMsg.id, { attachments });
         }
@@ -423,13 +438,17 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
           content: trimmed,
           attachments: attachments.map(({ id, name, mime, size, path }) => ({ id, name, mime, size, path })),
         });
-        if (msgErr) throw new Error(msgErr.message);
+        if (msgErr) {
+          await purgeAttachmentPaths(attachments.map((attachment) => attachment.path ?? '')).catch(() => {});
+          throw new Error(msgErr.message);
+        }
+        userMessageSaved = true;
 
         const history = [...prior, userMsg].map(toApi);
-        await runStream(convId, history, modelMsg.id, { title: isNew, userText: trimmed });
+        await runStream(convId, history, modelMsg.id, { title: isNew, userText: trimmed }, projectRef.current);
       } catch (e) {
         setMessages((prev) => {
-          const withoutPending = prev.filter((m) => m.id !== modelMsg.id);
+          const withoutPending = prev.filter((m) => m.id !== modelMsg.id && (userMessageSaved || m.id !== pendingUserId));
           return [...withoutPending, { id: uuid(), role: 'model', content: '', error: friendly(e) }];
         });
         setBusy(false);
@@ -455,7 +474,7 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
     const modelMsg: ChatMessage = { id: uuid(), role: 'model', content: '', streaming: true };
     setMessages([...base, modelMsg]);
     const history = base.filter(usable).map(toApi);
-    await runStream(convId, history, modelMsg.id);
+    await runStream(convId, history, modelMsg.id, undefined, projectRef.current);
   }, [busy, runStream]);
 
   const renameConversation = useCallback(async (id: string, title: string) => {
@@ -467,11 +486,12 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
   const deleteConversation = useCallback(
     async (id: string) => {
       const userId = (await supabase.auth.getSession()).data.session?.user.id;
+      const { error } = await supabase.from('conversations').delete().eq('id', id);
+      if (error) return false;
       setConversations((prev) => prev.filter((c) => c.id !== id));
       if (activeRef.current === id) newChat();
       if (userId) await purgeConversationFiles(userId, id);
-      const { error } = await supabase.from('conversations').delete().eq('id', id);
-      return !error;
+      return true;
     },
     [newChat],
   );
@@ -528,11 +548,12 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
 
   /** Full text of a chat for export (loads from the database, so it works for any chat in the list). */
   const loadForExport = useCallback(async (id: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('messages')
       .select('role,content,attachments,sources,created_at')
       .eq('conversation_id', id)
       .order('created_at', { ascending: true });
+    if (error) throw new Error(error.message);
     return (data ?? []) as {
       role: 'user' | 'model';
       content: string;
@@ -575,6 +596,7 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
     persona,
     searchOn,
     folders,
+    projectId,
     setPersona,
     setSearchOn,
     togglePin,

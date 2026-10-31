@@ -42,13 +42,13 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, o
   const [text, setText] = useState('');
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [menu, setMenu] = useState(false);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const focus = useSharedValue(0);
 
   useEffect(() => {
     if (prefill) {
       setText(prefill.text);
-      inputRef.current?.focus();
+      (inputRef.current as (React.ComponentRef<typeof TextInput> & { focus?: () => void }) | null)?.focus?.();
     }
   }, [prefill]);
 
