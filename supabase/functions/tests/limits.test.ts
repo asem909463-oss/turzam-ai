@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   geminiAcceptsTemperature,
+  globalPerDay,
   geminiThinkingLevel,
   LIMITS,
   maxOutputTokens,
@@ -110,4 +111,10 @@ test("client and server file limits match (src/lib/attachments.ts)", () => {
 test("bucket size limit in schema.sql matches the per-file limit", () => {
   const sql = readFileSync(new URL("../../schema.sql", import.meta.url), "utf8");
   assert.ok(sql.includes(`false, ${LIMITS.maxFileBytes})`));
+});
+
+test("global daily cap is off unless the secret is set", () => {
+  assert.equal(globalPerDay("chat", noEnv), null);
+  assert.equal(globalPerDay("chat", () => "0"), null);
+  assert.equal(globalPerDay("chat", (k) => (k === "GLOBAL_CHAT_PER_DAY" ? "3000" : "")), 3000);
 });

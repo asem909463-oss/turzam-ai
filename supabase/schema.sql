@@ -76,7 +76,7 @@ create table if not exists public.folders (
 alter table public.conversations add column if not exists folder_id uuid references public.folders(id) on delete set null;
 create index if not exists conversations_folder_idx on public.conversations(user_id, folder_id);
 
--- v1.3 additive project workspaces and daily AI action metering.
+-- v1.3 additive project workspaces.
 create table if not exists public.projects (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
@@ -101,13 +101,6 @@ alter table public.conversations add column if not exists project_id uuid refere
 create index if not exists conversations_project_idx on public.conversations(user_id, project_id, updated_at desc);
 create index if not exists project_files_project_idx on public.project_files(project_id, created_at desc);
 
-create table if not exists public.ai_usage (
-  user_id uuid not null references auth.users(id) on delete cascade,
-  usage_date date not null default current_date,
-  request_count integer not null default 0 check (request_count >= 0),
-  updated_at timestamptz not null default now(),
-  primary key (user_id, usage_date)
-);
 
 -- ---------- Row Level Security: every user sees ONLY their own rows ----------
 
@@ -118,7 +111,6 @@ alter table public.memories enable row level security;
 alter table public.folders enable row level security;
 alter table public.projects enable row level security;
 alter table public.project_files enable row level security;
-alter table public.ai_usage enable row level security;
 
 drop policy if exists "profiles own" on public.profiles;
 create policy "profiles own" on public.profiles
@@ -160,26 +152,9 @@ drop policy if exists "memories own" on public.memories;
 create policy "memories own" on public.memories
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
--- The app never reads or writes usage rows directly. This security-definer RPC performs
--- an atomic per-user daily increment and is called only by the authenticated edge function.
-create or replace function public.consume_turzam_ai_action()
-returns boolean language plpgsql security definer set search_path = public as $$
-declare
-  current_user_id uuid := auth.uid();
-  next_count integer;
-begin
-  if current_user_id is null then return false; end if;
-  insert into public.ai_usage as current_usage (user_id, usage_date, request_count, updated_at)
-  values (current_user_id, current_date, 1, now())
-  on conflict (user_id, usage_date) do update
-    set request_count = current_usage.request_count + 1, updated_at = now()
-    where current_usage.request_count < 200
-  returning request_count into next_count;
-  return next_count is not null;
-end;
-$$;
-revoke all on function public.consume_turzam_ai_action() from public, anon;
-grant execute on function public.consume_turzam_ai_action() to authenticated;
+-- (The old daily counter consume_turzam_ai_action / ai_usage was replaced by consume_quota below and is removed.)
+drop function if exists public.consume_turzam_ai_action();
+drop table if exists public.ai_usage;
 
 -- ---------- Automatic behaviour ----------
 
@@ -241,12 +216,14 @@ create table if not exists public.usage_events (
   created_at timestamptz not null default now()
 );
 create index if not exists usage_events_lookup on public.usage_events (user_id, kind, created_at desc);
+create index if not exists usage_events_global on public.usage_events (kind, created_at desc);
 alter table public.usage_events enable row level security;
 revoke all on public.usage_events from anon, authenticated;
 
 -- Returns {"ok": true} and records the call, or {"ok": false, "reason": "minute"|"day", "retry_after": seconds}.
 -- The limits come from the Edge Function (secrets LIMIT_*), but are capped here so nobody can fill the table.
-create or replace function public.consume_quota(p_kind text, p_per_minute int, p_per_day int)
+drop function if exists public.consume_quota(text, int, int);
+create or replace function public.consume_quota(p_kind text, p_per_minute int, p_per_day int, p_global_per_day int default null)
 returns jsonb
 language plpgsql
 security definer
@@ -259,6 +236,7 @@ declare
   n_min int;
   n_day int;
   oldest timestamptz;
+  n_all int;
 begin
   if uid is null then
     return jsonb_build_object('ok', false, 'reason', 'auth', 'retry_after', 60);
@@ -286,10 +264,18 @@ begin
       'retry_after', greatest(1, ceil(extract(epoch from (oldest + interval '1 day' - now())))::int));
   end if;
 
+  -- Optional cap across ALL users (protects the AI bill from many accounts). NULL = off.
+  if p_global_per_day is not null then
+    select count(*) into n_all from public.usage_events where kind = p_kind and created_at > now() - interval '1 day';
+    if n_all >= p_global_per_day then
+      return jsonb_build_object('ok', false, 'reason', 'global', 'retry_after', 300);
+    end if;
+  end if;
+
   insert into public.usage_events (user_id, kind) values (uid, p_kind);
   return jsonb_build_object('ok', true);
 end;
 $$;
 
-revoke all on function public.consume_quota(text, int, int) from public, anon;
-grant execute on function public.consume_quota(text, int, int) to authenticated;
+revoke all on function public.consume_quota(text, int, int, int) from public, anon;
+grant execute on function public.consume_quota(text, int, int, int) to authenticated;

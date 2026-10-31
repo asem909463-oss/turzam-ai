@@ -28,6 +28,7 @@ import {
   LIMITS,
   maxOutputTokens,
   providerErrorMessage,
+  globalPerDay,
   quotaFor,
   thinkingHeadroom,
   validateChat,
@@ -924,22 +925,29 @@ Rules:
 // ---------- per-user usage limits ----------
 
 // deno-lint-ignore no-explicit-any
-async function consume(supabase: any, kind: QuotaKind): Promise<{ ok: boolean; retryAfter: number; day: boolean; broken: boolean }> {
+async function consume(supabase: any, kind: QuotaKind): Promise<{ ok: boolean; retryAfter: number; day: boolean; global: boolean; broken: boolean }> {
   const q = quotaFor(kind, env);
-  const { data, error } = await supabase.rpc("consume_quota", { p_kind: kind, p_per_minute: q.perMinute, p_per_day: q.perDay });
+  const { data, error } = await supabase.rpc("consume_quota", {
+    p_kind: kind,
+    p_per_minute: q.perMinute,
+    p_per_day: q.perDay,
+    p_global_per_day: globalPerDay(kind, env),
+  });
   if (error || !data) {
     // Fail closed: without the counter, anyone could run up the AI bill.
     console.error("consume_quota failed", error?.message);
-    return { ok: false, retryAfter: 30, day: false, broken: true };
+    return { ok: false, retryAfter: 30, day: false, global: false, broken: true };
   }
-  return { ok: data.ok === true, retryAfter: Number(data.retry_after ?? 30), day: data.reason === "day", broken: false };
+  return { ok: data.ok === true, retryAfter: Number(data.retry_after ?? 30), day: data.reason === "day", global: data.reason === "global", broken: false };
 }
 
-function limitResponse(r: { retryAfter: number; day: boolean; broken: boolean }) {
+function limitResponse(r: { retryAfter: number; day: boolean; global: boolean; broken: boolean }) {
   if (r.broken) {
     return json({ error: "Usage limits are not set up on the server yet. Run the latest supabase/schema.sql (see the README)." }, 500);
   }
-  const msg = r.day
+  const msg = r.global
+    ? "Turzam is very busy right now. Please try again in a few minutes."
+    : r.day
     ? "You have reached today's usage limit. It resets within 24 hours."
     : `You are going a little fast. Try again in ${Math.max(1, r.retryAfter)} seconds.`;
   return new Response(JSON.stringify({ error: msg }), {

@@ -126,6 +126,15 @@ export function quotaFor(kind: QuotaKind, get: (k: string) => string): Quota {
   };
 }
 
+/**
+ * Optional cap on calls per day across ALL users (secret GLOBAL_CHAT_PER_DAY and so on).
+ * Returns null (off) when the secret is not set, so a launch is never throttled by surprise.
+ */
+export function globalPerDay(kind: QuotaKind, get: (k: string) => string): number | null {
+  const n = Number.parseInt(get(`GLOBAL_${kind.toUpperCase()}_PER_DAY`), 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 10_000_000) : null;
+}
+
 // ---------- output size and Gemini settings ----------
 
 /** Visible answer size cap in tokens (MAX_OUTPUT_TOKENS secret). */

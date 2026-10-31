@@ -140,7 +140,7 @@ Change `com.turzam.ai` in `app.json` to your own bundle id first.
 
 ## Known limits
 
-- The quotas protect your AI bill per user, but not against someone creating many accounts. Turn on email confirmation in Supabase (Authentication, Providers, Email) and consider a CAPTCHA before a public launch.
+- Per-user quotas do not stop someone creating many accounts. Set `GLOBAL_CHAT_PER_DAY` (and the SEARCH / TRANSCRIBE ones) in `supabase/.env` as a total daily cap, turn on **Confirm email** in Supabase (Authentication, Providers, Email), and enable CAPTCHA under Authentication, Attack Protection before a public launch.
 - Account deletion removes your data in this app's Supabase project. It does not delete anything already sent to Google, OpenAI or Anthropic (see their own policies).
 - Web-search sources come as Google redirect links; they open the real page.
 - Voice replies use the phone's voice for the language chosen in Settings; the app cannot detect the answer's language.
