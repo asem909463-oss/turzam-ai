@@ -22,6 +22,7 @@ do $$ begin
   if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
   if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
 end $$;
+alter role service_role bypassrls;
 create schema auth;
 create table auth.users (id uuid primary key);
 create function auth.uid() returns uuid language sql stable as
@@ -93,6 +94,27 @@ for role in anon authenticated; do
 done
 after=$(run -c "select count(*) from public.usage_events")
 expect "denied direct calls cannot write usage records" "$before" "$after"
+
+echo "-- account deletion recovery state survives failures but stays server-only"
+deletion_privileges=$(run -c "select concat(has_table_privilege('service_role','public.account_deletion_jobs','SELECT'),'|',has_table_privilege('service_role','public.account_deletion_jobs','INSERT'),'|',has_table_privilege('service_role','public.account_deletion_jobs','UPDATE'),'|',has_table_privilege('service_role','public.account_deletion_jobs','DELETE'),'|',has_table_privilege('authenticated','public.account_deletion_jobs','SELECT'),'|',has_table_privilege('authenticated','public.account_deletion_jobs','INSERT'),'|',has_table_privilege('anon','public.account_deletion_jobs','SELECT'),'|',has_table_privilege('anon','public.account_deletion_jobs','INSERT'))")
+expect "only trusted server role has recovery-table access" "t|t|t|t|f|f|f|f" "$deletion_privileges"
+for role in anon authenticated; do
+  if run -c "set role $role; select count(*) from public.account_deletion_jobs" >/dev/null 2>&1; then
+    echo "FAIL  $role cannot read deletion recovery state (query unexpectedly succeeded)"
+    fail=1
+  else
+    echo "PASS  $role cannot read deletion recovery state"
+  fi
+done
+run -c "set role service_role; insert into public.account_deletion_jobs(user_id,stage,last_error) values ('$TEST_UID','database','auth_delete_failed') on conflict (user_id) do update set stage='database',last_error='auth_delete_failed';" >/dev/null
+pending=$(run -c "select stage || '|' || last_error from public.account_deletion_jobs where user_id='$TEST_UID'")
+expect "failed database deletion remains recorded for retry" "database|auth_delete_failed" "$pending"
+still_active=$(run -c "select exists(select 1 from auth.users where id='$TEST_UID')")
+expect "failed cleanup leaves the account available for recovery" "t" "$still_active"
+run -c "set role service_role; update public.account_deletion_jobs set stage='storage',last_error=null,updated_at=now() where user_id='$TEST_UID'" >/dev/null
+retry_stage=$(run -c "select stage || '|' || coalesce(last_error,'clear') from public.account_deletion_jobs where user_id='$TEST_UID'")
+expect "a retry can resume the pending deletion cleanly" "storage|clear" "$retry_stage"
+run -c "set role service_role; delete from public.account_deletion_jobs where user_id='$TEST_UID'" >/dev/null
 
 # Concurrent callers: every caller connects first and then waits at a "starting gate" (an advisory lock held
 # by a helper session). When all of them are waiting the gate opens, so they hit consume_quota at the same instant.

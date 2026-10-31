@@ -302,3 +302,17 @@ $$;
 
 revoke all on function public.consume_quota(uuid, text, int, int, int) from public, anon, authenticated;
 grant execute on function public.consume_quota(uuid, text, int, int, int) to service_role;
+
+-- ---------- Resumable account-deletion recovery ----------
+-- A row means deletion is pending. It intentionally has no auth.users FK so it survives a failed
+-- auth deletion/cascade and can be resumed by the still-authenticated owner. It is server-only.
+create table if not exists public.account_deletion_jobs (
+  user_id uuid primary key,
+  requested_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  stage text not null default 'storage' check (stage in ('storage', 'database')),
+  last_error text
+);
+alter table public.account_deletion_jobs enable row level security;
+revoke all on public.account_deletion_jobs from public, anon, authenticated, service_role;
+grant select, insert, update, delete on public.account_deletion_jobs to service_role;

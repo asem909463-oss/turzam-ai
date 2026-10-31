@@ -41,7 +41,7 @@ export function DeleteAccountModal({
         <Animated.View entering={ZoomIn.springify().damping(18)} style={styles.card}>
           <Text style={styles.title}>Delete your account?</Text>
           <Text style={styles.body}>
-            This permanently deletes your account, all chats, uploaded files, folders and memories. It cannot be undone.
+            This permanently deletes your account, chats, uploaded files, folders and memories. If cleanup is interrupted, your account stays active and you can safely retry here; files already removed are skipped.
           </Text>
           <TextInput
             value={word}

@@ -149,7 +149,7 @@ All of this is enforced **on the server**, so a modified app cannot get around i
 - **Timeouts:** 30 s for the AI to start, 45 s of silence, 2 minutes total. Temporary errors (429/5xx) are retried once.
 - **Auto mode:** tries each connected AI in order and moves on to the next if one fails before answering. If you pick a specific AI, the app does not switch silently; it tells you what went wrong. Provider error details stay in the server log, not in the app.
 - **Files:** 4 per message, 10 MB each, 18 MB per message, everywhere (app, server and storage bucket). Deleting a chat or all chats removes every file (all pages, including files whose chat is gone); if files cannot be removed the chat is kept so you can retry. A failed upload removes the files that already went up.
-- **Delete account** (Settings): asks for the word DELETE and your password, checks the password on the server, removes all files, then deletes the account; chats, memories, folders and usage records go with it. Limited to 3 attempts per minute.
+- **Delete account** (Settings): asks for the word DELETE and your password, checks the password on the server, writes a private recovery record, removes all files, then deletes the account; chats, memories, folders and usage records go with it. If storage cleanup or the database cascade fails, the account stays active, the pending stage is retained server-side, and the same Settings action can safely be retried (already-removed files are skipped). Limited to 3 attempts per minute and 5 per day.
 
 ## Checks for developers
 
