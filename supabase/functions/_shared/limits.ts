@@ -33,6 +33,8 @@ export type ChatInput = {
   /** "auto" or a specific provider id. */
   provider: string;
   search: boolean;
+  /** Workspace the chat belongs to, or null. */
+  projectId: string | null;
   messages: InMessage[];
 };
 
@@ -48,6 +50,14 @@ export function validateChat(body: any): Result<ChatInput> {
   const mode = (MODE_IDS as readonly string[]).includes(body.mode) ? body.mode : "founder";
   const persona = (PERSONA_IDS as readonly string[]).includes(body.persona) ? body.persona : "none";
   const provider = (PROVIDER_IDS as readonly string[]).includes(body.provider) ? body.provider : "auto";
+
+  let projectId: string | null = null;
+  if (body.projectId !== undefined && body.projectId !== null) {
+    if (typeof body.projectId !== "string" || !/^[0-9a-f-]{36}$/i.test(body.projectId)) {
+      return { ok: false, error: "This project is unavailable." };
+    }
+    projectId = body.projectId;
+  }
 
   const raw = body.messages.slice(-LIMITS.maxMessages);
   const messages: InMessage[] = [];
@@ -84,7 +94,7 @@ export function validateChat(body: any): Result<ChatInput> {
     if (total > LIMITS.maxTotalChars && i < messages.length - 1) break;
     start = i;
   }
-  return { ok: true, value: { mode, persona, provider, search: body.search === true, messages: messages.slice(start) } };
+  return { ok: true, value: { mode, persona, provider, search: body.search === true, projectId, messages: messages.slice(start) } };
 }
 
 // ---------- usage quotas (enforced in the database, see consume_quota in schema.sql) ----------

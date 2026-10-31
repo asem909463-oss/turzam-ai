@@ -14,10 +14,13 @@ React Native + Expo + TypeScript app for iOS and Android. Supabase handles login
 - **Voice conversations:** tap the mic, talk, Turzam answers out loud and listens again (hands-free). Speech to text runs on the server with your Gemini key; the spoken answer uses your phone's built-in voice (free).
 - **Web search with sources:** the globe button turns it on. Answers come with clickable source links (uses Gemini's Google Search grounding, same Gemini key).
 - **Personalities:** Professional, Analyst, Creative, Teacher, Entrepreneur. They combine with any mode.
+- **Project workspaces:** keep project chats together with workspace instructions and up to 6 private reference files (images, PDFs and text). Existing chats remain in history if a project is deleted.
 - **Custom instructions** (Settings): your standing rules for how Turzam answers.
 - **Organise:** pin chats, folders, archive, search. **Export** any chat to PDF, Markdown or text.
 - **Image understanding:** multi-image, tap-to-zoom, quick actions (Describe, Extract text, Explain chart, Review design, Compare).
 - **Models:** Gemini, ChatGPT (OpenAI) and Claude (Anthropic). The app shows each one as **Connected** only when its key is set on the server. Gemini is required; the other two are optional.
+- **App reviews:** after 5 successful answers, a tasteful one-time-at-a-time prompt can open Apple’s or Google’s official in-app rating flow. Settings also includes Rate Turzam AI. The operating system decides whether to show its review sheet.
+- **Usage protection:** per-user limits on the server (see "Limits, costs and safety"), counted in the database and impossible to raise from the app.
 
 ## Where do my keys go?
 
@@ -107,42 +110,7 @@ No new keys are needed. Everything new runs on the **Gemini key you already have
 
 Search and voice input are **Gemini only**. If you only connect ChatGPT or Claude, those two buttons say they need the Gemini key. A natural-sounding cloud voice (OpenAI/ElevenLabs/Google TTS) would need a new paid key and is not included.
 
-**After updating:** run the new `supabase/schema.sql` again, redeploy with `npx supabase functions deploy chat` and `npx supabase functions deploy delete-account`, then `npm install` and `npx expo install --fix`. Voice and export use native modules (expo-audio, expo-speech, expo-print, expo-sharing), which are included in Expo Go, but microphone permission text is set in `app.json`, so rebuild if you use a custom build.
-
-## Limits, costs and safety (v1.3)
-
-All of this is enforced **on the server**, so a modified app cannot get around it.
-
-- **Per-user rate limits** (counted in the database, function `consume_quota`): chat 12 per minute and 150 per day, web search 6 per minute and 40 per day, titles/memory/ideas 30 per minute and 400 per day, voice 10 per minute and 100 per day. Change them with `LIMIT_CHAT_PER_DAY` and similar secrets (see `supabase/.env.example`). When a limit is hit the app shows a friendly message. If you forget to run the new `schema.sql`, the server refuses requests instead of running without limits.
-- **Input checks:** messages up to 12,000 characters, at most 40 messages and 120,000 characters of history per request, unknown modes/personalities ignored, malformed files dropped.
-- **Answer size:** `MAX_OUTPUT_TOKENS` (default 4096). Gemini 3.x counts its thinking in the same limit, so the server adds room for it. Gemini thinking defaults to `low` (cheapest); set `GEMINI_THINKING_LEVEL=medium` for better answers at higher cost. Gemini 3.x is run at its default temperature, as Google recommends.
-- **Stop really stops:** when you press Stop (or the connection drops) the server cancels the request to the AI provider, so it stops generating and billing. Titles, memory and follow-up ideas are skipped for stopped answers.
-- **Timeouts:** 30 s for the AI to start, 45 s of silence, 2 minutes total. Temporary errors (429/5xx) are retried once.
-- **Auto mode:** tries each connected AI in order and moves on to the next if one fails before answering. If you pick a specific AI, the app does not switch silently; it tells you what went wrong. Provider error details stay in the server log, not in the app.
-- **Files:** 4 per message, 10 MB each, 18 MB per message, everywhere (app, server and storage bucket). Deleting a chat or all chats removes every file (all pages, including files whose chat is gone); if files cannot be removed the chat is kept so you can retry. A failed upload removes the files that already went up.
-- **Delete account** (Settings): asks for the word DELETE and your password, checks the password on the server, removes all files, then deletes the account; chats, memories, folders and usage records go with it. Limited to 3 attempts per minute.
-
-## Checks for developers
-
-```powershell
-npm run check          # type-check the app + run the Edge Function tests
-npm run check:edge     # type-check and lint the Edge Functions (needs Deno: https://deno.com)
-npm run check:pinned   # fails if a dependency is not pinned or there is no lockfile
-```
-`.github/workflows/ci.yml` runs the same checks on every push to GitHub.
-
-### Pin versions and create the lockfile (do this once)
-
-Packages are currently listed as `*` (any version), and there is no `package-lock.json` yet because the environment this code was written in could not reach the npm registry. Run these on your computer, one at a time, then commit the two files:
-```powershell
-npm install
-npx expo install --fix
-npm run pin
-git add package.json package-lock.json
-git commit -m "Pin dependencies and add lockfile"
-git push
-```
-`npm run pin` replaces every `*` in `package.json` with the exact version that was installed. After that, use `npm ci` for clean installs, and `npx expo install <package>` to add packages.
+**After updating:** run the new `supabase/schema.sql` again first (it adds project tables, usage limits and folders without deleting existing data), then redeploy with `npx supabase functions deploy chat` and `npx supabase functions deploy delete-account`, then run `npm install` and `npx expo install --fix`. Voice, export and store reviews use Expo native modules; microphone permission text is set in `app.json`, so rebuild if you use a custom build.
 
 ## Attachments
 

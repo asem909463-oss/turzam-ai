@@ -55,6 +55,8 @@ function Gate() {
           <Stack.Screen name="index" options={{ animation: 'fade' }} />
           <Stack.Screen name="settings" />
           <Stack.Screen name="memory" />
+          <Stack.Screen name="projects" />
+          <Stack.Screen name="project" />
         </Stack.Protected>
       </Stack>
     </>

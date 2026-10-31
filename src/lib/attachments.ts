@@ -197,11 +197,12 @@ export async function purgeConversationFiles(userId: string, convId: string): Pr
   if (failed) throw new Error(`${failed} file(s) could not be removed from storage.`);
 }
 
-/** Removes everything the user has in storage, including files left behind by chats that no longer exist. */
+/** Removes every chat file the user has in storage, including files left behind by chats that no longer exist. Project reference files (folder "projects") are kept. */
 export async function purgeAllUserFiles(userId: string): Promise<void> {
   const chats = await listAll(userId);
   let failed = 0;
   for (const c of chats) {
+    if (c.name === 'projects') continue; // reference files of project workspaces are not chat files
     if (c.id !== null) {
       failed += await removeStoredFiles([`${userId}/${c.name}`]);
       continue;

@@ -78,6 +78,7 @@ export async function streamChat(opts: {
   provider: string;
   persona?: string;
   search?: boolean;
+  projectId?: string;
   messages: ApiMessage[];
   signal: AbortSignal;
   onText: (text: string) => void;
@@ -98,6 +99,7 @@ export async function streamChat(opts: {
         provider: opts.provider,
         persona: opts.persona,
         search: opts.search === true,
+        projectId: opts.projectId,
         messages: opts.messages,
       }),
     });

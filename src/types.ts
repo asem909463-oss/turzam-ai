@@ -12,6 +12,7 @@ export type Conversation = {
   pinned?: boolean;
   archived?: boolean;
   folder_id?: string | null;
+  project_id?: string | null;
   updated_at: string;
 };
 

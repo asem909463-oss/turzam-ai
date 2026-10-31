@@ -1,8 +1,9 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FlatList, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
-import { useFocusEffect, useRouter } from 'expo-router';
+import * as StoreReview from 'expo-store-review';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Aurora } from '../src/components/Aurora';
@@ -17,6 +18,7 @@ import { MessageBubble } from '../src/components/MessageBubble';
 import { ModeSheet } from '../src/components/ModeSheet';
 import { Motto } from '../src/components/Motto';
 import { PressableScale } from '../src/components/PressableScale';
+import { ReviewPrompt } from '../src/components/ReviewPrompt';
 import { Skeleton } from '../src/components/Skeleton';
 import { WordReveal } from '../src/components/WordReveal';
 import { useAuth } from '../src/context/AuthContext';
@@ -27,11 +29,20 @@ import { useProviders } from '../src/hooks/useProviders';
 import { getMode, getPersona } from '../src/modes';
 import { exportChat, type ExportFormat } from '../src/lib/export';
 import { cleanForSpeech } from '../src/lib/speech';
+import { dismissReviewPrompt, recordSuccessfulAnswer, snoozeReviewPrompt } from '../src/lib/reviews';
 import { greeting } from '../src/lib/utils';
 import { fonts, radius, Theme, withAlpha } from '../src/theme';
-import type { ChatMessage } from '../src/types';
+import type { ChatMessage, ModeId } from '../src/types';
 
 const MODEL_LABEL: Record<string, string> = { auto: 'Auto', gemini: 'Gemini', openai: 'ChatGPT', anthropic: 'Claude' };
+const QUICK_TOOLS: { id: string; label: string; icon: React.ComponentProps<typeof Ionicons>['name']; mode: ModeId; prompt: string; research?: boolean }[] = [
+  { id: 'research', label: 'Research', icon: 'globe-outline', mode: 'think', prompt: 'Deeply research this topic using reliable, current sources. Separate verified facts from analysis, cite sources, and end with the most useful next step: [describe the topic].', research: true },
+  { id: 'study', label: 'Study', icon: 'school-outline', mode: 'tutor', prompt: 'Teach me this topic in clear, manageable steps. Use a concrete example, then check my understanding: [topic].' },
+  { id: 'write', label: 'Write', icon: 'create-outline', mode: 'create', prompt: 'Help me write a polished, original draft for this purpose. Ask only if essential details are missing: [what I need to write].' },
+  { id: 'code', label: 'Code', icon: 'code-slash-outline', mode: 'code', prompt: 'Help me solve this coding task. Give runnable code, explain key choices, and point out edge cases: [describe the task and language].' },
+  { id: 'translate', label: 'Translate', icon: 'language-outline', mode: 'balanced', prompt: 'Translate the text below into [target language]. Preserve its meaning, tone, names, and formatting. If the target language is not clear, ask me.\n\n[paste text here]' },
+  { id: 'summarize', label: 'Summarize', icon: 'list-outline', mode: 'balanced', prompt: 'Summarize the material below into the key points, decisions, and action items. Keep important names and numbers accurate.\n\n[paste text here]' },
+];
 
 function pickFour<T>(list: T[], seed: number): T[] {
   // small deterministic shuffle so "Shuffle" gives a new set each tap
@@ -52,8 +63,14 @@ export default function ChatScreen() {
   const styles = useStyles(make);
   const toast = useToast();
   const { user, profile } = useAuth();
+  const routeParams = useLocalSearchParams<{ projectId?: string; conversationId?: string }>();
   const [answer, setAnswer] = useState<{ text: string; nonce: number } | null>(null);
-  const chat = useChat({ onAnswer: (text) => setAnswer({ text, nonce: Date.now() }) });
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const handledRouteRef = useRef('');
+  const chat = useChat({ onAnswer: (text) => {
+    setAnswer({ text, nonce: Date.now() });
+    recordSuccessfulAnswer().then((eligible) => { if (eligible) setReviewOpen(true); }).catch(() => {});
+  } });
   const { providers, caps } = useProviders();
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [viewImage, setViewImage] = useState<string | null>(null);
@@ -70,6 +87,21 @@ export default function ChatScreen() {
       syncList();
     }, [syncList]),
   );
+
+  useEffect(() => {
+    const projectId = typeof routeParams.projectId === 'string' ? routeParams.projectId : '';
+    const conversationId = typeof routeParams.conversationId === 'string' ? routeParams.conversationId : '';
+    if (!projectId && !conversationId) {
+      handledRouteRef.current = '';
+      return;
+    }
+    const key = conversationId ? `chat:${conversationId}` : `project:${projectId}`;
+    if (handledRouteRef.current === key) return;
+    handledRouteRef.current = key;
+    if (conversationId) chat.openConversation(conversationId);
+    else chat.newChat(projectId);
+    router.setParams({ projectId: undefined, conversationId: undefined });
+  }, [routeParams.projectId, routeParams.conversationId, chat.openConversation, chat.newChat, router]);
 
   const mode = getMode(chat.mode);
   const persona = getPersona(chat.persona);
@@ -144,6 +176,18 @@ export default function ChatScreen() {
           </View>
         </View>
 
+        {chat.projectId ? (
+          <PressableScale
+            onPress={() => router.push({ pathname: '/project', params: { id: chat.projectId as string } })}
+            style={styles.projectBanner}
+            label="Open current project workspace"
+          >
+            <Ionicons name="layers-outline" size={15} color={colors.accentInk} />
+            <Text style={styles.projectBannerText}>Project context is on</Text>
+            <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
+          </PressableScale>
+        ) : null}
+
         {/* Body */}
         <View style={styles.column}>
           {chat.loadingConv ? (
@@ -164,6 +208,29 @@ export default function ChatScreen() {
               <Animated.View entering={FadeInDown.delay(500).duration(500)} style={{ marginTop: 6, marginBottom: 20 }}>
                 <Motto size={19} />
               </Animated.View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickTools} style={styles.quickToolsScroll}>
+                {QUICK_TOOLS.map((tool) => (
+                  <PressableScale
+                    key={tool.id}
+                    onPress={() => {
+                      chat.setMode(tool.mode);
+                      if (tool.research) {
+                        if (caps?.search === true) chat.setSearchOn(true);
+                        else {
+                          chat.setSearchOn(false);
+                          toast.show('Live-source research needs the Gemini key on the server.', 'info');
+                        }
+                      }
+                      setPrefill({ text: tool.prompt, nonce: Date.now() });
+                    }}
+                    style={[styles.quickTool, { borderColor: withAlpha(mode.color, 0.35), backgroundColor: withAlpha(mode.color, 0.08) }]}
+                    label={`${tool.label} assistant`}
+                  >
+                    <Ionicons name={tool.icon} size={15} color={mode.color} />
+                    <Text style={[styles.quickToolText, { color: colors.text }]}>{tool.label}</Text>
+                  </PressableScale>
+                ))}
+              </ScrollView>
               <View style={styles.cards}>
                 {ideas.map((s, i) => (
                   <Animated.View key={`${seed}-${s.title}`} entering={FadeInDown.delay(260 + i * 70).duration(380)} style={styles.cardWrap}>
@@ -202,7 +269,7 @@ export default function ChatScreen() {
               ListHeaderComponent={
                 !chat.busy && chat.suggestions.length ? (
                   <FollowUps items={chat.suggestions} accent={mode.color} onPick={(t) => chat.send(t, [])} />
-                ) : null
+                ) : undefined
               }
             />
           )}
@@ -213,7 +280,7 @@ export default function ChatScreen() {
           <Composer
             busy={chat.busy}
             accent={mode.color}
-            placeholder={`Message Turzam · ${mode.name}`}
+            placeholder={`Message Turzam · ${chat.projectId ? 'Project' : mode.name}`}
             onSend={chat.send}
             onStop={chat.stop}
             prefill={prefill}
@@ -286,6 +353,10 @@ export default function ChatScreen() {
           setDrawerOpen(false);
           router.push('/memory');
         }}
+        onOpenProjects={() => {
+          setDrawerOpen(false);
+          router.push('/projects');
+        }}
         onOpenSettings={() => {
           setDrawerOpen(false);
           router.push('/settings');
@@ -316,6 +387,22 @@ export default function ChatScreen() {
       />
 
       <ImageViewer uri={viewImage} onClose={() => setViewImage(null)} />
+
+      <ReviewPrompt
+        visible={reviewOpen}
+        onRate={async () => {
+          setReviewOpen(false);
+          await dismissReviewPrompt();
+          try {
+            if (await StoreReview.isAvailableAsync()) await StoreReview.requestReview();
+            else toast.show('The official rating prompt is available from an app-store installation.', 'info');
+          } catch {
+            toast.show('Could not open the rating prompt right now.', 'info');
+          }
+        }}
+        onLater={async () => { setReviewOpen(false); await snoozeReviewPrompt(); }}
+        onDismiss={async () => { setReviewOpen(false); await dismissReviewPrompt(); }}
+      />
 
       <ModeSheet
         visible={modeOpen}
@@ -357,6 +444,8 @@ const make = (t: Theme) =>
     modePill: { flexDirection: 'row', alignItems: 'center', gap: 7, height: 42, paddingHorizontal: 14, borderRadius: 21, borderWidth: 1 },
     modeText: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 15 },
     modelText: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 13 },
+    projectBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'center', width: '100%', maxWidth: 760, paddingHorizontal: 14, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: t.colors.border, backgroundColor: withAlpha(t.colors.surface, 0.72) },
+    projectBannerText: { flex: 1, color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 12 },
     column: { flex: 1, width: '100%', maxWidth: 760, alignSelf: 'center' },
     skeletons: { padding: 20, gap: 12, paddingTop: 30 },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
@@ -375,5 +464,9 @@ const make = (t: Theme) =>
     cardPrompt: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 13, lineHeight: 18 },
     shuffle: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, paddingVertical: 8, paddingHorizontal: 12 },
     shuffleText: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 13 },
+    quickToolsScroll: { alignSelf: 'stretch', flexGrow: 0, marginTop: -8, marginBottom: 10 },
+    quickTools: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 2 },
+    quickTool: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, borderRadius: 17, borderWidth: 1 },
+    quickToolText: { fontFamily: fonts.ui, fontSize: 12 },
     disclaimer: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 11.5, textAlign: 'center', marginTop: 6 },
   });

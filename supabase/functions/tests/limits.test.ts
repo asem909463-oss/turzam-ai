@@ -23,6 +23,16 @@ test("validateChat accepts a normal request and defaults unknown values", () => 
   assert.equal(r.value.persona, "none");
   assert.equal(r.value.provider, "auto");
   assert.equal(r.value.search, false);
+  assert.equal(r.value.projectId, null);
+});
+
+test("validateChat checks the project id", () => {
+  const id = "123e4567-e89b-12d3-a456-426614174000";
+  const ok = validateChat({ projectId: id, messages: [msg("hi")] });
+  assert.ok(ok.ok);
+  assert.equal(ok.value.projectId, id);
+  assert.equal(validateChat({ projectId: "../etc", messages: [msg("hi")] }).ok, false);
+  assert.equal(validateChat({ projectId: 5, messages: [msg("hi")] }).ok, false);
 });
 
 test("validateChat rejects bad shapes", () => {

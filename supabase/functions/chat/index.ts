@@ -31,6 +31,7 @@ import {
   quotaFor,
   thinkingHeadroom,
   validateChat,
+  type InFile,
   type InMessage,
   type QuotaKind,
 } from "../_shared/limits.ts";
@@ -636,7 +637,38 @@ async function handleChat(supabase: any, userId: string, input: Extract<ReturnTy
     .eq("id", userId)
     .maybeSingle();
 
+  // Project workspace: its instructions and up to 6 reference files are added to this chat.
+  let projectName = "";
+  let projectInstructions = "";
+  const projectFiles: InFile[] = [];
+  if (v.projectId) {
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("id,name,instructions")
+      .eq("id", v.projectId)
+      .maybeSingle();
+    if (projectError || !project) return json({ error: "This project is unavailable." }, 404);
+    projectName = String(project.name ?? "").slice(0, 60);
+    projectInstructions = String(project.instructions ?? "").slice(0, 2000).trim();
+    const { data: files, error: filesError } = await supabase
+      .from("project_files")
+      .select("name,mime,path,size")
+      .eq("project_id", v.projectId)
+      .order("created_at", { ascending: false })
+      .limit(6);
+    if (filesError) return json({ error: "Could not load the project's reference files." }, 500);
+    for (const f of files ?? []) {
+      if (
+        typeof f.path === "string" && f.path.startsWith(`${userId}/projects/${v.projectId}/`) && !f.path.includes("..") &&
+        Number(f.size ?? 0) <= LIMITS.maxFileBytes
+      ) {
+        projectFiles.push({ name: String(f.name).slice(0, 120), mime: String(f.mime).slice(0, 120), path: f.path });
+      }
+    }
+  }
+
   let extra = "";
+  if (projectName) extra += `\nThe current workspace is "${projectName}". Keep the user's request grounded in this project when relevant.`;
   if (profile?.display_name) extra += `\nThe user's name is ${String(profile.display_name).slice(0, 80)}.`;
 
   if (profile?.memory_enabled !== false) {
@@ -653,7 +685,11 @@ async function handleChat(supabase: any, userId: string, input: Extract<ReturnTy
     }
   }
 
-  const resolved = await resolveMessages(supabase, userId, v.messages);
+  // Reference files belong to the newest user message (the request-wide file caps still apply).
+  const messages = v.messages.map((m, i) =>
+    i === v.messages.length - 1 && projectFiles.length ? { ...m, files: [...m.files, ...projectFiles] } : m
+  );
+  const resolved = await resolveMessages(supabase, userId, messages);
 
   const persona = PERSONAS[v.persona] ?? "";
   const custom = String(profile?.custom_instructions ?? "").trim().slice(0, LIMITS.maxInstructionChars);
@@ -663,6 +699,9 @@ async function handleChat(supabase: any, userId: string, input: Extract<ReturnTy
   const buildSystem = (provider: Provider, search: boolean) => {
     let system =
       `${BASE_PROMPT}\nYou are currently answering through ${PROVIDERS[provider].name} (${PROVIDERS[provider].vendor}). If the user asks which model powers you, say that.${extra}\nToday's date is ${today}.\n\n${mode.prompt}`;
+    if (projectInstructions) {
+      system += `\n\nProject instructions (user-provided context for this workspace):\n<project_instructions>\n${projectInstructions}\n</project_instructions>`;
+    }
     if (persona) system += `\n\n${persona}`;
     if (hasImage) system += `\n\n${VISION_PROMPT}`;
     if (custom) {
