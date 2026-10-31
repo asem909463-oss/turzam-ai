@@ -24,11 +24,21 @@ export default function MemoryScreen() {
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [items, setItems] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [busyClear, setBusyClear] = useState(false);
   const [draft, setDraft] = useState('');
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from('memories').select('id,content,pinned,created_at').order('pinned', { ascending: false }).order('created_at', { ascending: false });
-    setItems((data ?? []) as Memory[]);
+    const { data, error } = await supabase
+      .from('memories')
+      .select('id,content,pinned,created_at')
+      .order('pinned', { ascending: false })
+      .order('created_at', { ascending: false });
+    if (error) setLoadError(error.message);
+    else {
+      setLoadError(null);
+      setItems((data ?? []) as Memory[]);
+    }
     setLoading(false);
   }, []);
 
@@ -39,9 +49,20 @@ export default function MemoryScreen() {
   async function add() {
     const content = draft.trim().slice(0, 280);
     if (!content) return;
+    if (items.length >= 200) {
+      toast.show('Memory is full (200 notes). Remove some first.', 'error');
+      return;
+    }
+    if (items.some((m) => m.content.trim().toLowerCase() === content.toLowerCase())) {
+      toast.show('Turzam already remembers that.', 'info');
+      return;
+    }
     setDraft('');
     const { data, error } = await supabase.from('memories').insert({ content }).select('id,content,pinned,created_at').single();
-    if (error) toast.show(`Could not save: ${error.message}`, 'error');
+    if (error) {
+      setDraft(content); // keep what was typed so nothing is lost
+      toast.show('Could not save that. Check your connection and try again.', 'error');
+    }
     else if (data) {
       setItems((prev) => [data as Memory, ...prev]);
       toast.show('Remembered', 'success');
@@ -91,10 +112,16 @@ export default function MemoryScreen() {
         text: 'Forget all',
         style: 'destructive',
         onPress: async () => {
-          const ids = items.map((m) => m.id);
+          if (busyClear) return;
+          setBusyClear(true);
+          const before = items;
           setItems([]);
-          if (ids.length) await supabase.from('memories').delete().in('id', ids);
-          toast.show('Memory cleared', 'success');
+          const { error } = await supabase.from('memories').delete().in('id', before.map((m) => m.id));
+          setBusyClear(false);
+          if (error) {
+            setItems(before);
+            toast.show('Could not clear memory. Nothing was deleted.', 'error');
+          } else toast.show('Memory cleared', 'success');
         },
       },
     ]);
@@ -148,7 +175,22 @@ export default function MemoryScreen() {
           </PressableScale>
         </View>
 
-        {loading ? (
+        {loadError && !loading ? (
+          <View style={styles.emptyBox}>
+            <Ionicons name="cloud-offline-outline" size={34} color={colors.textFaint} />
+            <Text style={styles.emptyText}>Could not load your memories. Check your connection{loadError.includes('relation') || loadError.includes('column') ? ' and run the latest schema.sql' : ''}.</Text>
+            <PressableScale
+              onPress={() => {
+                setLoading(true);
+                load();
+              }}
+              label="Try again"
+              style={styles.retryBtn}
+            >
+              <Text style={styles.clear}>Try again</Text>
+            </PressableScale>
+          </View>
+        ) : loading ? (
           <View style={{ padding: 16, gap: 10 }}>
             {[0, 1, 2].map((i) => (
               <Skeleton key={i} height={52} radius={16} />
@@ -240,6 +282,7 @@ const make = (t: Theme) =>
     pauseHint: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 12.5, marginTop: 2 },
     editBox: { borderBottomWidth: 1, borderBottomColor: t.colors.accent, paddingBottom: 4 },
     itemText: { flex: 1, color: t.colors.text, fontFamily: fonts.uiRegular, fontSize: 15, lineHeight: 21 },
+    retryBtn: { paddingVertical: 10, paddingHorizontal: 18 },
     emptyBox: { alignItems: 'center', gap: 12, marginTop: 50, paddingHorizontal: 30 },
     emptyText: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 14, lineHeight: 21, textAlign: 'center' },
   });

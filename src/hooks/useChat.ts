@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usePrefs } from '../context/ThemeContext';
-import { fileKind, purgeConversationFiles, uploadAttachment } from '../lib/attachments';
+import { fileKind, purgeConversationFiles, removeStoredFiles, uploadAttachments } from '../lib/attachments';
 import { supabase } from '../lib/supabase';
 import { ApiMessage, callFunction, streamChat } from '../lib/stream';
 import { uuid } from '../lib/utils';
@@ -290,7 +290,7 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
             if (activeRef.current === convId) patchMessage(modelId, { sources: list });
           },
           onMeta: (meta) => {
-            if (meta.search) searched = true;
+            searched = meta.search === true;
             if (meta.provider) {
               provider = meta.provider;
               if (activeRef.current === convId) patchMessage(modelId, { provider: meta.provider });
@@ -333,10 +333,10 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
             })
             .catch(() => {});
         }
-        if (token && memoryOnRef.current && lastUser) {
+        if (token && memoryOnRef.current && lastUser && !ctrl.signal.aborted) {
           callFunction(token, { action: 'remember', user: lastUser, assistant: acc }).catch(() => {});
         }
-        if (token && followRef.current && !error) {
+        if (token && followRef.current && !error && !ctrl.signal.aborted) {
           callFunction<{ suggestions: string[] }>(token, {
             action: 'suggest',
             user: lastUser,
@@ -411,7 +411,7 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
 
         let attachments: Attachment[] = [];
         if (files.length) {
-          attachments = await Promise.all(files.map((f) => uploadAttachment(userId, convId as string, f)));
+          attachments = await uploadAttachments(userId, convId as string, files);
           userMsg.attachments = attachments;
           patchMessage(userMsg.id, { attachments });
         }
@@ -423,7 +423,11 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
           content: trimmed,
           attachments: attachments.map(({ id, name, mime, size, path }) => ({ id, name, mime, size, path })),
         });
-        if (msgErr) throw new Error(msgErr.message);
+        if (msgErr) {
+          // The message was not saved, so its files would be orphans: remove them again.
+          if (attachments.length) await removeStoredFiles(attachments.map((a) => a.path as string));
+          throw new Error(msgErr.message);
+        }
 
         const history = [...prior, userMsg].map(toApi);
         await runStream(convId, history, modelMsg.id, { title: isNew, userText: trimmed });
@@ -469,11 +473,20 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
       const userId = (await supabase.auth.getSession()).data.session?.user.id;
       setConversations((prev) => prev.filter((c) => c.id !== id));
       if (activeRef.current === id) newChat();
-      if (userId) await purgeConversationFiles(userId, id);
+      // Files first: if they cannot be removed the chat is kept (put back in the list) so nothing is orphaned.
+      if (userId) {
+        try {
+          await purgeConversationFiles(userId, id);
+        } catch {
+          loadConversations();
+          return false;
+        }
+      }
       const { error } = await supabase.from('conversations').delete().eq('id', id);
+      if (error) loadConversations();
       return !error;
     },
-    [newChat],
+    [newChat, loadConversations],
   );
 
   const patchConversation = useCallback(async (id: string, patch: Partial<Conversation>) => {

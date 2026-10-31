@@ -69,6 +69,7 @@ npx supabase login
 npx supabase link --project-ref YOUR-PROJECT-REF
 npx supabase secrets set --env-file supabase/.env
 npx supabase functions deploy chat
+npx supabase functions deploy delete-account
 ```
 Added a key later? Repeat only the `secrets set` line, then reopen the app.
 
@@ -89,7 +90,7 @@ Phone app ──(your login token)──> Supabase Edge Function "chat" ──(s
 - `app/` screens: chat, sign-in, settings (with About), memory.
 - `src/` components, chat logic (`hooks/useChat.ts`), theme, modes, attachments.
 - `supabase/schema.sql` tables, security rules, private file storage.
-- `supabase/functions/chat/index.ts` the only code that touches AI keys. It reads attached files with the user's own permission, so nobody can read someone else's files.
+- `supabase/functions/chat/index.ts` the only code that touches AI keys (shared limits and checks are in `supabase/functions/_shared/limits.ts`). `supabase/functions/delete-account/index.ts` is the only code that uses the service-role key, and Supabase provides that key to it automatically. It reads attached files with the user's own permission, so nobody can read someone else's files.
 
 Models can be changed any time with `GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL` in `supabase/.env`, then repeat the `secrets set` command. No app update needed.
 
@@ -106,11 +107,46 @@ No new keys are needed. Everything new runs on the **Gemini key you already have
 
 Search and voice input are **Gemini only**. If you only connect ChatGPT or Claude, those two buttons say they need the Gemini key. A natural-sounding cloud voice (OpenAI/ElevenLabs/Google TTS) would need a new paid key and is not included.
 
-**After updating:** run the new `supabase/schema.sql` again, redeploy with `npx supabase functions deploy chat`, then `npm install` and `npx expo install --fix`. Voice and export use native modules (expo-audio, expo-speech, expo-print, expo-sharing), which are included in Expo Go, but microphone permission text is set in `app.json`, so rebuild if you use a custom build.
+**After updating:** run the new `supabase/schema.sql` again, redeploy with `npx supabase functions deploy chat` and `npx supabase functions deploy delete-account`, then `npm install` and `npx expo install --fix`. Voice and export use native modules (expo-audio, expo-speech, expo-print, expo-sharing), which are included in Expo Go, but microphone permission text is set in `app.json`, so rebuild if you use a custom build.
+
+## Limits, costs and safety (v1.3)
+
+All of this is enforced **on the server**, so a modified app cannot get around it.
+
+- **Per-user rate limits** (counted in the database, function `consume_quota`): chat 12 per minute and 150 per day, web search 6 per minute and 40 per day, titles/memory/ideas 30 per minute and 400 per day, voice 10 per minute and 100 per day. Change them with `LIMIT_CHAT_PER_DAY` and similar secrets (see `supabase/.env.example`). When a limit is hit the app shows a friendly message. If you forget to run the new `schema.sql`, the server refuses requests instead of running without limits.
+- **Input checks:** messages up to 12,000 characters, at most 40 messages and 120,000 characters of history per request, unknown modes/personalities ignored, malformed files dropped.
+- **Answer size:** `MAX_OUTPUT_TOKENS` (default 4096). Gemini 3.x counts its thinking in the same limit, so the server adds room for it. Gemini thinking defaults to `low` (cheapest); set `GEMINI_THINKING_LEVEL=medium` for better answers at higher cost. Gemini 3.x is run at its default temperature, as Google recommends.
+- **Stop really stops:** when you press Stop (or the connection drops) the server cancels the request to the AI provider, so it stops generating and billing. Titles, memory and follow-up ideas are skipped for stopped answers.
+- **Timeouts:** 30 s for the AI to start, 45 s of silence, 2 minutes total. Temporary errors (429/5xx) are retried once.
+- **Auto mode:** tries each connected AI in order and moves on to the next if one fails before answering. If you pick a specific AI, the app does not switch silently; it tells you what went wrong. Provider error details stay in the server log, not in the app.
+- **Files:** 4 per message, 10 MB each, 18 MB per message, everywhere (app, server and storage bucket). Deleting a chat or all chats removes every file (all pages, including files whose chat is gone); if files cannot be removed the chat is kept so you can retry. A failed upload removes the files that already went up.
+- **Delete account** (Settings): asks for the word DELETE and your password, checks the password on the server, removes all files, then deletes the account; chats, memories, folders and usage records go with it. Limited to 3 attempts per minute.
+
+## Checks for developers
+
+```powershell
+npm run check          # type-check the app + run the Edge Function tests
+npm run check:edge     # type-check and lint the Edge Functions (needs Deno: https://deno.com)
+npm run check:pinned   # fails if a dependency is not pinned or there is no lockfile
+```
+`.github/workflows/ci.yml` runs the same checks on every push to GitHub.
+
+### Pin versions and create the lockfile (do this once)
+
+Packages are currently listed as `*` (any version), and there is no `package-lock.json` yet because the environment this code was written in could not reach the npm registry. Run these on your computer, one at a time, then commit the two files:
+```powershell
+npm install
+npx expo install --fix
+npm run pin
+git add package.json package-lock.json
+git commit -m "Pin dependencies and add lockfile"
+git push
+```
+`npm run pin` replaces every `*` in `package.json` with the exact version that was installed. After that, use `npm ci` for clean installs, and `npx expo install <package>` to add packages.
 
 ## Attachments
 
-Up to 4 files per message, 10 MB each. Photos are sent at high quality and you can pick several at once. Supported: images, PDF, and text-like files (txt, md, csv, json, xml, html, code). Word and Excel files are not supported yet; export them to PDF or CSV first.
+Up to 4 files per message, 10 MB each (18 MB per message). Photos are sent at high quality and you can pick several at once. Supported: images, PDF, and text-like files (txt, md, csv, json, xml, html, code). Word and Excel files are not supported yet; export them to PDF or CSV first.
 
 ## Troubleshooting
 
@@ -136,9 +172,8 @@ Change `com.turzam.ai` in `app.json` to your own bundle id first.
 
 ## Known limits
 
-- Deleting your account itself needs a server action with the service-role key; it is not included. Chats, files and memories can be deleted in the app.
-- Voice and search have no per-user limits yet, so add rate limits before a public launch (each voice turn and each search costs money).
-- Voice replies are read in the phone's voice for the chosen language; the app cannot detect the answer's language, so set the voice language in Settings if you chat in more than one.
+- The quotas protect your AI bill per user, but not against someone creating many accounts. Turn on email confirmation in Supabase (Authentication, Providers, Email) and consider a CAPTCHA before a public launch.
+- Account deletion removes your data in this app's Supabase project. It does not delete anything already sent to Google, OpenAI or Anthropic (see their own policies).
 - Web-search sources come as Google redirect links; they open the real page.
-- Per-user rate limits for AI usage are not included yet. Add them before a public launch.
+- Voice replies use the phone's voice for the language chosen in Settings; the app cannot detect the answer's language.
 - In-app toasts are included; push notifications are not.

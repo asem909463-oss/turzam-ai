@@ -1,0 +1,43 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  app:
+    name: App (TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install packages
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else echo "::warning::No package-lock.json yet. See README, 'Pin versions'."; npm install; fi
+      - name: Type-check the app
+        run: npm run typecheck
+      - name: Dependencies pinned and lockfile present
+        # Turn this into a hard failure (remove continue-on-error) once you have committed the lockfile.
+        run: npm run check:pinned
+        continue-on-error: true
+
+  edge:
+    name: Supabase Edge Functions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Unit tests (limits, validation, Gemini settings)
+        run: npm run test:edge
+      - name: Type-check the functions
+        run: deno check supabase/functions/chat/index.ts supabase/functions/delete-account/index.ts
+      - name: Lint the functions
+        run: deno lint supabase/functions

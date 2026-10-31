@@ -134,6 +134,21 @@ function safeName(name: string): string {
   return (cleaned || 'file').slice(-80);
 }
 
+/** Removes stored files in small batches. Returns how many could not be removed. */
+export async function removeStoredFiles(paths: string[]): Promise<number> {
+  let failed = 0;
+  for (let i = 0; i < paths.length; i += 50) {
+    const batch = paths.slice(i, i + 50);
+    try {
+      const { error } = await supabase.storage.from(BUCKET).remove(batch);
+      if (error) failed += batch.length;
+    } catch {
+      failed += batch.length;
+    }
+  }
+  return failed;
+}
+
 /** Uploads one picked file into the user's private folder and returns its attachment record. */
 export async function uploadAttachment(userId: string, convId: string, f: PickedFile): Promise<Attachment> {
   const res = await fetch(f.uri);
@@ -145,13 +160,55 @@ export async function uploadAttachment(userId: string, convId: string, f: Picked
   return { id: uuid(), name: f.name, mime: f.mime, size: buf.byteLength, path, uri: f.uri };
 }
 
-/** Removes every uploaded file of a conversation (best effort). */
-export async function purgeConversationFiles(userId: string, convId: string): Promise<void> {
-  try {
-    const folder = `${userId}/${convId}`;
-    const { data } = await supabase.storage.from(BUCKET).list(folder, { limit: 100 });
-    if (data?.length) await supabase.storage.from(BUCKET).remove(data.map((o) => `${folder}/${o.name}`));
-  } catch {
-    // ignore: the database rows are what matters
+/**
+ * Uploads several files all-or-nothing: if one fails, the ones that already went up are removed again,
+ * so a failed send never leaves orphan files in storage.
+ */
+export async function uploadAttachments(userId: string, convId: string, files: PickedFile[]): Promise<Attachment[]> {
+  const results = await Promise.allSettled(files.map((f) => uploadAttachment(userId, convId, f)));
+  const done = results.filter((r): r is PromiseFulfilledResult<Attachment> => r.status === 'fulfilled').map((r) => r.value);
+  const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+  if (failed) {
+    await removeStoredFiles(done.map((a) => a.path as string));
+    throw failed.reason instanceof Error ? failed.reason : new Error('Upload failed.');
   }
+  return done;
+}
+
+/** Lists EVERY file directly inside a storage folder, page by page. Folders come back with id === null. */
+async function listAll(folder: string): Promise<{ name: string; id: string | null }[]> {
+  const all: { name: string; id: string | null }[] = [];
+  const PAGE = 100;
+  for (let offset = 0; offset < 20000; offset += PAGE) {
+    const { data, error } = await supabase.storage.from(BUCKET).list(folder, { limit: PAGE, offset });
+    if (error) throw new Error(error.message);
+    if (!data?.length) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return all;
+}
+
+/** Removes every uploaded file of a conversation. Throws if some files could not be removed. */
+export async function purgeConversationFiles(userId: string, convId: string): Promise<void> {
+  const folder = `${userId}/${convId}`;
+  const items = await listAll(folder);
+  const failed = await removeStoredFiles(items.filter((o) => o.id !== null).map((o) => `${folder}/${o.name}`));
+  if (failed) throw new Error(`${failed} file(s) could not be removed from storage.`);
+}
+
+/** Removes everything the user has in storage, including files left behind by chats that no longer exist. */
+export async function purgeAllUserFiles(userId: string): Promise<void> {
+  const chats = await listAll(userId);
+  let failed = 0;
+  for (const c of chats) {
+    if (c.id !== null) {
+      failed += await removeStoredFiles([`${userId}/${c.name}`]);
+      continue;
+    }
+    const folder = `${userId}/${c.name}`;
+    const files = (await listAll(folder)).filter((o) => o.id !== null).map((o) => `${folder}/${o.name}`);
+    failed += await removeStoredFiles(files);
+  }
+  if (failed) throw new Error(`${failed} file(s) could not be removed from storage.`);
 }

@@ -140,8 +140,8 @@ create trigger on_message_created
 -- ---------- Private storage for uploaded images, PDFs and files ----------
 
 insert into storage.buckets (id, name, public, file_size_limit)
-values ('attachments', 'attachments', false, 15728640)
-on conflict (id) do update set file_size_limit = 15728640, public = false;
+values ('attachments', 'attachments', false, 10485760)
+on conflict (id) do update set file_size_limit = 10485760, public = false;
 
 drop policy if exists "attachments read own" on storage.objects;
 create policy "attachments read own" on storage.objects
@@ -154,3 +154,68 @@ create policy "attachments insert own" on storage.objects
 drop policy if exists "attachments delete own" on storage.objects;
 create policy "attachments delete own" on storage.objects
   for delete using (bucket_id = 'attachments' and (storage.foldername(name))[1] = auth.uid()::text);
+
+
+-- ---------- Usage limits (v1.3) ----------
+-- One row per AI call. Nobody can read or write this table directly; only consume_quota() touches it,
+-- and it always works on the signed-in user (auth.uid()), never on a user id passed in.
+
+create table if not exists public.usage_events (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  kind text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists usage_events_lookup on public.usage_events (user_id, kind, created_at desc);
+alter table public.usage_events enable row level security;
+revoke all on public.usage_events from anon, authenticated;
+
+-- Returns {"ok": true} and records the call, or {"ok": false, "reason": "minute"|"day", "retry_after": seconds}.
+-- The limits come from the Edge Function (secrets LIMIT_*), but are capped here so nobody can fill the table.
+create or replace function public.consume_quota(p_kind text, p_per_minute int, p_per_day int)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  per_min int := least(greatest(coalesce(p_per_minute, 1), 1), 120);
+  per_day int := least(greatest(coalesce(p_per_day, 1), 1), 5000);
+  n_min int;
+  n_day int;
+  oldest timestamptz;
+begin
+  if uid is null then
+    return jsonb_build_object('ok', false, 'reason', 'auth', 'retry_after', 60);
+  end if;
+  if p_kind not in ('chat', 'search', 'aux', 'transcribe', 'delete') then
+    return jsonb_build_object('ok', false, 'reason', 'kind', 'retry_after', 60);
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(uid::text || ':' || p_kind, 0));
+  delete from public.usage_events where user_id = uid and created_at < now() - interval '2 days';
+
+  select count(*), min(created_at) into n_min, oldest
+    from public.usage_events
+    where user_id = uid and kind = p_kind and created_at > now() - interval '1 minute';
+  if n_min >= per_min then
+    return jsonb_build_object('ok', false, 'reason', 'minute',
+      'retry_after', greatest(1, ceil(extract(epoch from (oldest + interval '1 minute' - now())))::int));
+  end if;
+
+  select count(*), min(created_at) into n_day, oldest
+    from public.usage_events
+    where user_id = uid and kind = p_kind and created_at > now() - interval '1 day';
+  if n_day >= per_day then
+    return jsonb_build_object('ok', false, 'reason', 'day',
+      'retry_after', greatest(1, ceil(extract(epoch from (oldest + interval '1 day' - now())))::int));
+  end if;
+
+  insert into public.usage_events (user_id, kind) values (uid, p_kind);
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+revoke all on function public.consume_quota(text, int, int) from public, anon;
+grant execute on function public.consume_quota(text, int, int) to authenticated;

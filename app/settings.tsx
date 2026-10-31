@@ -10,17 +10,20 @@ import { Logo } from '../src/components/Logo';
 import { MOTTO } from '../src/components/Motto';
 import { PressableScale } from '../src/components/PressableScale';
 import { ScreenHeader } from '../src/components/ScreenHeader';
+import { DeleteAccountModal } from '../src/components/DeleteAccountModal';
 import { Toggle } from '../src/components/Toggle';
 import { useAuth } from '../src/context/AuthContext';
 import { usePrefs, useStyles, useTheme } from '../src/context/ThemeContext';
 import { useToast } from '../src/context/ToastContext';
 import { useProviders } from '../src/hooks/useProviders';
 import { deleteAllChats } from '../src/lib/chats';
+import { deleteAccountRequest } from '../src/lib/stream';
+import { supabase } from '../src/lib/supabase';
 import { MODES, PERSONAS } from '../src/modes';
 import { ACCENTS, fonts, radius, Scheme, Theme, withAlpha } from '../src/theme';
 import type { ModelChoice } from '../src/types';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 
 const VOICE_LANGS: { id: string; label: string }[] = [
   { id: '', label: 'Auto' },
@@ -79,6 +82,9 @@ export default function Settings() {
   const { user, profile, updateProfile, signOut } = useAuth();
   const { providers, error: providersError, refresh } = useProviders();
   const [name, setName] = useState(profile?.display_name ?? '');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [instructions, setInstructions] = useState(profile?.custom_instructions ?? '');
 
   async function save(patch: Parameters<typeof updateProfile>[0], okText?: string) {
@@ -110,6 +116,23 @@ export default function Settings() {
         },
       },
     ]);
+  }
+
+  async function deleteAccount(password: string) {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      if (!token) throw new Error('Please sign in again.');
+      await deleteAccountRequest(token, password);
+      setDeleteOpen(false);
+      toast.show('Your account was deleted', 'success');
+      await signOut(); // clears the local session; the sign-in screen appears
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Could not delete the account.');
+    } finally {
+      setDeleting(false);
+    }
   }
 
   function confirmSignOut() {
@@ -315,6 +338,17 @@ export default function Settings() {
             <Ionicons name="trash-outline" size={19} color={colors.danger} />
             <Text style={[styles.linkText, { color: colors.danger }]}>Delete all chats</Text>
           </PressableScale>
+          <PressableScale
+            onPress={() => {
+              setDeleteError(null);
+              setDeleteOpen(true);
+            }}
+            style={styles.linkRow}
+            label="Delete account"
+          >
+            <Ionicons name="person-remove-outline" size={19} color={colors.danger} />
+            <Text style={[styles.linkText, { color: colors.danger }]}>Delete account</Text>
+          </PressableScale>
           <PressableScale onPress={confirmSignOut} style={styles.linkRow} label="Sign out">
             <Ionicons name="log-out-outline" size={19} color={colors.text} />
             <Text style={styles.linkText}>Sign out</Text>
@@ -364,6 +398,13 @@ export default function Settings() {
           <Text style={styles.version}>Version {APP_VERSION}</Text>
         </Animated.View>
       </ScrollView>
+      <DeleteAccountModal
+        visible={deleteOpen}
+        busy={deleting}
+        error={deleteError}
+        onCancel={() => setDeleteOpen(false)}
+        onConfirm={deleteAccount}
+      />
     </View>
   );
 }
