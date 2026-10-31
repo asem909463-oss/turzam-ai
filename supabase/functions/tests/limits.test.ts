@@ -10,12 +10,32 @@ import {
   maxOutputTokens,
   providerErrorMessage,
   quotaFor,
+  readJsonLimited,
+  searchConfigurationError,
   thinkingHeadroom,
   validateChat,
 } from "../_shared/limits.ts";
 
 const noEnv = () => "";
 const msg = (text: string, extra = {}) => ({ role: "user", text, ...extra });
+
+test("readJsonLimited parses valid JSON within the byte limit", async () => {
+  const request = new Request("https://example.test", { method: "POST", body: JSON.stringify({ ok: true }) });
+  const result = await readJsonLimited(request, 100);
+  assert.deepEqual(result, { ok: true, value: { ok: true } });
+});
+
+test("readJsonLimited rejects oversized bodies based on streamed bytes", async () => {
+  const request = new Request("https://example.test", { method: "POST", body: JSON.stringify({ text: "too long" }) });
+  const result = await readJsonLimited(request, 8);
+  assert.deepEqual(result, { ok: false, error: "too_large" });
+});
+
+test("readJsonLimited rejects malformed JSON", async () => {
+  const request = new Request("https://example.test", { method: "POST", body: "{" });
+  const result = await readJsonLimited(request, 10);
+  assert.deepEqual(result, { ok: false, error: "invalid" });
+});
 
 test("validateChat accepts a normal request and defaults unknown values", () => {
   const r = validateChat({ mode: "evil", persona: "x", provider: "other", messages: [msg("hi")] });
@@ -44,6 +64,14 @@ test("validateChat rejects bad shapes", () => {
   assert.equal(validateChat({ messages: [msg("x".repeat(LIMITS.maxUserChars + 1))] }).ok, false);
   const files = Array.from({ length: LIMITS.maxFilesPerMessage + 1 }, (_, i) => ({ name: "a", mime: "image/png", path: `u/c/${i}` }));
   assert.equal(validateChat({ messages: [msg("hi", { files })] }).ok, false);
+});
+
+test("search configuration rejects unavailable or unsupported provider combinations", () => {
+  assert.equal(searchConfigurationError(false, "openai", false), null);
+  assert.match(searchConfigurationError(true, "auto", false) ?? "", /Gemini key/i);
+  assert.match(searchConfigurationError(true, "openai", true) ?? "", /Gemini or Auto/i);
+  assert.equal(searchConfigurationError(true, "gemini", true), null);
+  assert.equal(searchConfigurationError(true, "auto", true), null);
 });
 
 test("validateChat keeps only the newest messages within the size budget", () => {

@@ -20,7 +20,7 @@
 // their paths. This function downloads them with the user's own token (Row Level Security applies)
 // and passes images / PDFs / text to the chosen model.
 
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient } from "@supabase/supabase-js";
 import {
   geminiAcceptsTemperature,
   geminiThinkingLevel,
@@ -30,6 +30,8 @@ import {
   providerErrorMessage,
   globalPerDay,
   quotaFor,
+  readJsonLimited,
+  searchConfigurationError,
   thinkingHeadroom,
   validateChat,
   type InFile,
@@ -615,7 +617,7 @@ function parseStringArray(raw: string): string[] {
 // ---------- action handlers ----------
 
 // deno-lint-ignore no-explicit-any
-async function handleChat(supabase: any, userId: string, input: Extract<ReturnType<typeof validateChat>, { ok: true }>, req: Request) {
+async function handleChat(supabase: any, quotaClient: any, userId: string, input: Extract<ReturnType<typeof validateChat>, { ok: true }>, req: Request) {
   const v = input.value;
   const ok = available();
   if (!ok.length) return json({ error: "No AI provider is connected on the server yet. See the README, step 5." }, 500);
@@ -718,7 +720,7 @@ async function handleChat(supabase: any, userId: string, input: Extract<ReturnTy
   // Search is billed by Google per query, so it has its own, smaller quota. Over it? Answer without search.
   let searchAllowed = searchPossible;
   if (searchAllowed) {
-    const q = await consume(supabase, "search");
+    const q = await consume(quotaClient, userId, "search");
     if (!q.ok) searchAllowed = false;
   }
 
@@ -925,9 +927,11 @@ Rules:
 // ---------- per-user usage limits ----------
 
 // deno-lint-ignore no-explicit-any
-async function consume(supabase: any, kind: QuotaKind): Promise<{ ok: boolean; retryAfter: number; day: boolean; global: boolean; broken: boolean }> {
+async function consume(quotaClient: any, userId: string, kind: QuotaKind): Promise<{ ok: boolean; retryAfter: number; day: boolean; global: boolean; broken: boolean }> {
+  if (!quotaClient) return { ok: false, retryAfter: 30, day: false, global: false, broken: true };
   const q = quotaFor(kind, env);
-  const { data, error } = await supabase.rpc("consume_quota", {
+  const { data, error } = await quotaClient.rpc("consume_quota", {
+    p_user_id: userId,
     p_kind: kind,
     p_per_minute: q.perMinute,
     p_per_day: q.perDay,
@@ -960,24 +964,34 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "Use POST." }, 405);
 
-  const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+  const url = Deno.env.get("SUPABASE_URL")!;
+  const supabase = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },
+    auth: { persistSession: false, autoRefreshToken: false },
   });
   const { data: auth, error: authError } = await supabase.auth.getUser();
   if (authError || !auth.user) return json({ error: "Please sign in again." }, 401);
+  // The privileged client is used only for the quota RPC; user data continues through the RLS-bound client.
+  const serviceRoleKey = env("SUPABASE_SERVICE_ROLE_KEY");
+  const quotaClient = serviceRoleKey
+    ? createClient(url, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } })
+    : null;
 
-  // Refuse oversized bodies early (the largest legitimate one is a ~7 MB voice clip).
-  const declared = Number(req.headers.get("content-length") ?? 0);
-  if (declared > 9_000_000) return json({ error: "That request is too large." }, 413);
-
-  // deno-lint-ignore no-explicit-any
-  let body: any;
-  try {
-    body = await req.json();
-  } catch (_) {
-    return json({ error: "Bad request." }, 400);
+  // Refuse oversized bodies early, then enforce the same cap while reading the stream. This also
+  // covers chunked requests and missing or inaccurate Content-Length headers.
+  const declared = req.headers.get("content-length");
+  if (declared && /^\d+$/.test(declared) && Number(declared) > LIMITS.maxHttpBodyBytes) {
+    return json({ error: "That request is too large." }, 413);
   }
-  if (!body || typeof body !== "object") return json({ error: "Bad request." }, 400);
+  const parsed = await readJsonLimited(req, LIMITS.maxHttpBodyBytes);
+  if (!parsed.ok) {
+    return parsed.error === "too_large"
+      ? json({ error: "That request is too large." }, 413)
+      : json({ error: "Bad request." }, 400);
+  }
+  // deno-lint-ignore no-explicit-any
+  const body: any = parsed.value;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Bad request." }, 400);
 
   if (body.action === "models") {
     return json({
@@ -1002,12 +1016,14 @@ Deno.serve(async (req) => {
       case "chat": {
         const input = validateChat(body);
         if (!input.ok) return json({ error: input.error }, 400);
-        const q = await consume(supabase, "chat");
+        const searchError = searchConfigurationError(input.value.search, input.value.provider, PROVIDERS.gemini.key().length > 0);
+        if (searchError) return json({ error: searchError }, 400);
+        const q = await consume(quotaClient, auth.user.id, "chat");
         if (!q.ok) return limitResponse(q);
-        return await handleChat(supabase, auth.user.id, input, req);
+        return await handleChat(supabase, quotaClient, auth.user.id, input, req);
       }
       case "title": {
-        const q = await consume(supabase, "aux");
+        const q = await consume(quotaClient, auth.user.id, "aux");
         if (!q.ok) return limitResponse(q);
         const text = String(body.text ?? "").slice(0, 600);
         const title = await generate(
@@ -1016,17 +1032,17 @@ Deno.serve(async (req) => {
         return json({ title: title.replace(/["'.\n]/g, "").slice(0, 60) || "New chat" });
       }
       case "remember": {
-        const q = await consume(supabase, "aux");
+        const q = await consume(quotaClient, auth.user.id, "aux");
         if (!q.ok) return limitResponse(q);
         return await handleRemember(supabase, auth.user.id, body);
       }
       case "suggest": {
-        const q = await consume(supabase, "aux");
+        const q = await consume(quotaClient, auth.user.id, "aux");
         if (!q.ok) return limitResponse(q);
         return await handleSuggest(body);
       }
       case "transcribe": {
-        const q = await consume(supabase, "transcribe");
+        const q = await consume(quotaClient, auth.user.id, "transcribe");
         if (!q.ok) return limitResponse(q);
         return await handleTranscribe(body);
       }

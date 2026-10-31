@@ -31,7 +31,7 @@ React Native + Expo + TypeScript app for iOS and Android. Supabase handles login
 | **Gemini API key** (required) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
 | OpenAI key (optional, enables ChatGPT) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
 | Anthropic key (optional, enables Claude) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
-| Supabase **service_role** key | **You never paste it anywhere**: not in `.env`, not in `supabase/.env`, not in GitHub, not in the app. Supabase hands it to the `delete-account` function by itself while it runs (as `SUPABASE_SERVICE_ROLE_KEY`), and only that one function uses it, only to delete a user's files and account after the user confirms with their password. The chat function never sees it. | Never |
+| Supabase **service_role** key | **You never paste it anywhere**: not in `.env`, not in `supabase/.env`, not in GitHub, not in the app. Supabase provides it to trusted Edge Functions at runtime. The chat function uses it only for server-side quota checks; `delete-account` uses it for confirmed file/account deletion. | Never |
 
 **Only two places ever hold keys on your computer:**
 
@@ -48,14 +48,14 @@ You need: [Node.js LTS](https://nodejs.org), a free [Supabase](https://supabase.
 
 **1. Install the app's packages** (PowerShell, inside the project folder)
 ```powershell
-npm install
-npx expo install --fix
+npm ci
+npx expo install --check
 ```
 
 **2. Create or update the database**
 1. In Supabase click **New project** and wait until it is ready.
 2. Open **SQL Editor → New query**, paste everything from `supabase/schema.sql`, click **Run**.
-   Already ran an older version? Run it again. It is safe to repeat and adds the new columns and the file storage.
+   Already ran an older version? Run the latest file again. It is safe to repeat; it adds new schema objects, revokes direct client access to `consume_quota`, and clears only invalid cross-user folder links (the chats themselves are kept).
 3. Only while developing: **Authentication → Providers → Email**, turn **Confirm email** off so test accounts can sign in at once. Turn it back **on** before real users arrive (see "Development vs production" below).
 
 **3. Put the Supabase keys in `.env`**
@@ -100,10 +100,10 @@ Phone app ──(your login token)──> Supabase Edge Function "chat" ──(s
     └── private file storage + database (Row Level Security: every user only sees their own rows)
 ```
 
-- `app/` screens: chat, sign-in, settings (with About), memory.
+- `app/` screens: chat, sign-in, settings (with About), memory, and project workspaces.
 - `src/` components, chat logic (`hooks/useChat.ts`), theme, modes, attachments.
 - `supabase/schema.sql` tables, security rules, private file storage.
-- `supabase/functions/chat/index.ts` the only code that touches AI keys (shared limits and checks are in `supabase/functions/_shared/limits.ts`). `supabase/functions/delete-account/index.ts` is the only code that uses the service-role key, and Supabase provides that key to it automatically. It reads attached files with the user's own permission, so nobody can read someone else's files.
+- `supabase/functions/chat/index.ts` is the only code that touches AI provider keys (shared limits and checks are in `supabase/functions/_shared/limits.ts`). Trusted Edge Functions use the service-role key only server-side; chat uses it for the quota RPC, while account deletion uses it for confirmed cleanup. Chat reads attachments with the user's own token, so it cannot read another user's files.
 
 Models can be changed any time with `GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL` in `supabase/.env`, then repeat the `secrets set` command. No app update needed.
 
@@ -120,7 +120,7 @@ No new keys are needed. Everything new runs on the **Gemini key you already have
 
 Search and voice input are **Gemini only**. If you only connect ChatGPT or Claude, those two buttons say they need the Gemini key. A natural-sounding cloud voice (OpenAI/ElevenLabs/Google TTS) would need a new paid key and is not included.
 
-**After updating:** run the new `supabase/schema.sql` again first (it adds project tables, usage limits and folders without deleting existing data), then redeploy with `npx supabase functions deploy chat` and `npx supabase functions deploy delete-account`, then run `npm install` and `npx expo install --fix`. Voice, export and store reviews use Expo native modules; microphone permission text is set in `app.json`, so rebuild if you use a custom build.
+**When you choose to roll out an update:** run the latest `supabase/schema.sql` first (it adds project tables, usage limits and folders without deleting existing chats), then deploy the updated `chat` and `delete-account` functions, install with `npm ci`, and verify with `npx expo install --check`. Voice, export and store reviews use Expo native modules; microphone permission text is set in `app.json`, so a custom native build may be required for app changes.
 
 ## Development vs production settings
 
@@ -141,7 +141,7 @@ If you change `supabase/.env`, run `npx supabase secrets set --env-file supabase
 
 All of this is enforced **on the server**, so a modified app cannot get around it.
 
-- **Per-user rate limits** (counted in the database, function `consume_quota`): chat 12 per minute and 150 per day, web search 6 per minute and 40 per day, titles/memory/ideas 30 per minute and 400 per day, voice 10 per minute and 100 per day. Change them with `LIMIT_CHAT_PER_DAY` and similar secrets (see `supabase/.env.example`). When a limit is hit the app shows a friendly message. If you forget to run the new `schema.sql`, the server refuses requests instead of running without limits.
+- **Per-user rate limits** (counted in the database, function `consume_quota`): chat 12 per minute and 150 per day, web search 6 per minute and 40 per day, titles/memory/ideas 30 per minute and 400 per day, voice 10 per minute and 100 per day. Only trusted Edge Functions can execute the quota RPC; API roles cannot manipulate counters or consume the global cap directly. Change limits with `LIMIT_CHAT_PER_DAY` and similar secrets (see `supabase/.env.example`). If you forget to run the latest `schema.sql`, the server refuses requests instead of running without limits.
 - **Total daily cap (optional):** `GLOBAL_CHAT_PER_DAY` and similar secrets stop the whole app at a daily number of calls, whoever makes them. Off until you set it. The check-then-count runs under a database lock per action type, so many users hitting it in the same instant cannot push it past the cap (proved by `npm run test:quota`).
 - **Input checks:** messages up to 12,000 characters, at most 40 messages and 120,000 characters of history per request, unknown modes/personalities ignored, malformed files dropped.
 - **Answer size:** `MAX_OUTPUT_TOKENS` (default 4096). Gemini 3.x counts its thinking in the same limit, so the server adds room for it. Gemini thinking defaults to `low` (cheapest); set `GEMINI_THINKING_LEVEL=medium` for better answers at higher cost. Gemini 3.x is run at its default temperature, as Google recommends.
@@ -157,24 +157,16 @@ All of this is enforced **on the server**, so a modified app cannot get around i
 npm run check          # type-check the app + run the Edge Function tests
 npm run check:edge     # type-check and lint the Edge Functions (needs Deno: https://deno.com)
 npm run check:pinned   # fails if a dependency is not pinned or there is no lockfile
+npm audit --audit-level=moderate # fail on moderate-or-higher npm advisories
 npm run check:env      # are .env and supabase/.env filled in correctly (prints no secrets)
 npm run check:secrets  # scans the files git tracks for keys
-npm run test:quota     # usage limits under simultaneous users (needs PostgreSQL, see the script header)
+npm run test:quota     # quota abuse, limits under concurrency and folder RLS (needs PostgreSQL)
 ```
-`.github/workflows/ci.yml` runs them on every push to GitHub. The pinned-versions check becomes **mandatory** (a failing build) as soon as `package-lock.json` exists in the repository.
+`.github/workflows/ci.yml` runs app checks, npm audit, Edge Function tests/type-check/lint, secret scanning and PostgreSQL regressions on pushes to any branch and pull requests.
 
-### Pin versions and create the lockfile (do this once)
+### Dependencies and lockfile
 
-Packages are currently listed as `*` (any version), and there is no `package-lock.json` yet because the environment this code was written in could not reach the npm registry. Run these on your computer, one at a time, then commit the two files:
-```powershell
-npm install
-npx expo install --fix
-npm run pin
-git add package.json package-lock.json
-git commit -m "Pin dependencies and add lockfile"
-git push
-```
-`npm run pin` replaces every `*` in `package.json` with the exact version that was installed. After that, use `npm ci` for clean installs, and `npx expo install <package>` to add packages.
+All direct dependencies are exact-pinned and `package-lock.json` is generated by npm from the public registry. Use `npm ci` for clean installs. When adding an Expo package, use `npx expo install <package>`, run `npm run pin` to keep direct versions exact, regenerate the lock with `npm install`, and run `npm run check:pinned`, `npm audit --audit-level=moderate` and `npm run check` before committing.
 
 ## Attachments
 

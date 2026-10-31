@@ -18,6 +18,7 @@ export const LIMITS = {
   maxRequestBytes: 24 * 1024 * 1024,
   maxTextFileChars: 80_000,
   maxAudioBase64: 7_000_000,
+  maxHttpBodyBytes: 9_000_000,
   maxInstructionChars: 1500,
 } as const;
 
@@ -41,6 +42,44 @@ export type ChatInput = {
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max) : "");
+
+export type LimitedJsonResult = { ok: true; value: unknown } | { ok: false; error: "too_large" | "invalid" };
+
+/** Parse JSON while counting streamed bytes, even when Content-Length is absent or inaccurate. */
+export async function readJsonLimited(request: Request, maxBytes: number): Promise<LimitedJsonResult> {
+  const reader = request.body?.getReader();
+  if (!reader || !Number.isSafeInteger(maxBytes) || maxBytes < 0) return { ok: false, error: "invalid" };
+
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return { ok: false, error: "too_large" };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false, error: "invalid" };
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return { ok: true, value: JSON.parse(new TextDecoder().decode(bytes)) };
+  } catch {
+    return { ok: false, error: "invalid" };
+  }
+}
 
 // deno-lint-ignore no-explicit-any
 export function validateChat(body: any): Result<ChatInput> {
@@ -95,6 +134,13 @@ export function validateChat(body: any): Result<ChatInput> {
     start = i;
   }
   return { ok: true, value: { mode, persona, provider, search: body.search === true, projectId, messages: messages.slice(start) } };
+}
+
+export function searchConfigurationError(search: boolean, provider: string, geminiAvailable: boolean): string | null {
+  if (!search) return null;
+  if (!geminiAvailable) return "Web search needs a Gemini key on the server.";
+  if (provider !== "auto" && provider !== "gemini") return "Web search is available with Gemini or Auto. Choose one before searching.";
+  return null;
 }
 
 // ---------- usage quotas (enforced in the database, see consume_quota in schema.sql) ----------
