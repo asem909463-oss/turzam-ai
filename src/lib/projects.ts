@@ -111,18 +111,19 @@ export async function uploadProjectFile(userId: string, projectId: string, file:
 }
 
 export async function deleteProjectFile(file: ProjectFile): Promise<void> {
+  // Remove the stored file first: if this fails the row stays, so the user can simply retry.
+  const { error: storageError } = await supabase.storage.from(BUCKET).remove([file.path]);
+  if (storageError) throw new Error(`Could not remove the file. Please try again: ${storageError.message}`);
   const { error } = await supabase.from('project_files').delete().eq('id', file.id);
   if (error) throw new Error(error.message);
-  const { error: storageError } = await supabase.storage.from(BUCKET).remove([file.path]);
-  if (storageError) throw new Error(`File removed from the project, but storage cleanup needs retry: ${storageError.message}`);
 }
 
 export async function deleteProject(id: string): Promise<void> {
   const files = await listProjectFiles(id);
-  const { error } = await supabase.from('projects').delete().eq('id', id);
-  if (error) throw new Error(error.message);
   if (files.length) {
     const { error: storageError } = await supabase.storage.from(BUCKET).remove(files.map((file) => file.path));
-    if (storageError) throw new Error(`Project deleted; some uploaded files may need storage cleanup: ${storageError.message}`);
+    if (storageError) throw new Error(`Could not remove the project's files. Please try again: ${storageError.message}`);
   }
+  const { error } = await supabase.from('projects').delete().eq('id', id);
+  if (error) throw new Error(error.message);
 }
