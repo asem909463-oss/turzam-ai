@@ -14,10 +14,13 @@ React Native + Expo + TypeScript app for iOS and Android. Supabase handles login
 - **Voice conversations:** tap the mic, talk, Turzam answers out loud and listens again (hands-free). Speech to text runs on the server with your Gemini key; the spoken answer uses your phone's built-in voice (free).
 - **Web search with sources:** the globe button turns it on. Answers come with clickable source links (uses Gemini's Google Search grounding, same Gemini key).
 - **Personalities:** Professional, Analyst, Creative, Teacher, Entrepreneur. They combine with any mode.
+- **Project workspaces:** keep project chats together with workspace instructions and up to 6 private reference files (images, PDFs and text). Existing chats remain in history if a project is deleted.
 - **Custom instructions** (Settings): your standing rules for how Turzam answers.
 - **Organise:** pin chats, folders, archive, search. **Export** any chat to PDF, Markdown or text.
 - **Image understanding:** multi-image, tap-to-zoom, quick actions (Describe, Extract text, Explain chart, Review design, Compare).
 - **Models:** Gemini, ChatGPT (OpenAI) and Claude (Anthropic). The app shows each one as **Connected** only when its key is set on the server. Gemini is required; the other two are optional.
+- **App reviews:** after 5 successful answers, a tasteful one-time-at-a-time prompt can open Apple’s or Google’s official in-app rating flow. Settings also includes Rate Turzam AI. The operating system decides whether to show its review sheet.
+- **Usage protection:** the authenticated server function atomically limits AI actions to 200 per user per database calendar day. The fixed cap includes chat, voice transcription, titles, memory extraction and follow-up generation and cannot be raised by a client request.
 
 ## Where do my keys go?
 
@@ -106,7 +109,7 @@ No new keys are needed. Everything new runs on the **Gemini key you already have
 
 Search and voice input are **Gemini only**. If you only connect ChatGPT or Claude, those two buttons say they need the Gemini key. A natural-sounding cloud voice (OpenAI/ElevenLabs/Google TTS) would need a new paid key and is not included.
 
-**After updating:** run the new `supabase/schema.sql` again, redeploy with `npx supabase functions deploy chat`, then `npm install` and `npx expo install --fix`. Voice and export use native modules (expo-audio, expo-speech, expo-print, expo-sharing), which are included in Expo Go, but microphone permission text is set in `app.json`, so rebuild if you use a custom build.
+**After updating:** run the new `supabase/schema.sql` again first (it adds project tables, a nullable project link, and a private usage counter without deleting existing data), then redeploy with `npx supabase functions deploy chat`, then run `npm install` and `npx expo install --fix`. Voice, export and store reviews use Expo native modules; microphone permission text is set in `app.json`, so rebuild if you use a custom build.
 
 ## Attachments
 
@@ -137,8 +140,7 @@ Change `com.turzam.ai` in `app.json` to your own bundle id first.
 ## Known limits
 
 - Deleting your account itself needs a server action with the service-role key; it is not included. Chats, files and memories can be deleted in the app.
-- Voice and search have no per-user limits yet, so add rate limits before a public launch (each voice turn and each search costs money).
+- The fixed per-user daily budget is 200 billable AI actions, including background title/memory/follow-up calls; usage resets on the database server's calendar day.
 - Voice replies are read in the phone's voice for the chosen language; the app cannot detect the answer's language, so set the voice language in Settings if you chat in more than one.
 - Web-search sources come as Google redirect links; they open the real page.
-- Per-user rate limits for AI usage are not included yet. Add them before a public launch.
 - In-app toasts are included; push notifications are not.

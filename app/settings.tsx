@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as StoreReview from 'expo-store-review';
 import { useRouter } from 'expo-router';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,7 +21,7 @@ import { MODES, PERSONAS } from '../src/modes';
 import { ACCENTS, fonts, radius, Scheme, Theme, withAlpha } from '../src/theme';
 import type { ModelChoice } from '../src/types';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 
 const VOICE_LANGS: { id: string; label: string }[] = [
   { id: '', label: 'Auto' },
@@ -117,6 +118,15 @@ export default function Settings() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign out', style: 'destructive', onPress: () => signOut() },
     ]);
+  }
+
+  async function rateUs() {
+    try {
+      if (await StoreReview.isAvailableAsync()) await StoreReview.requestReview();
+      else toast.show('The official rating prompt is available from an app-store installation.', 'info');
+    } catch {
+      toast.show('Could not open the rating prompt right now.', 'info');
+    }
   }
 
   const connected = (providers ?? []).filter((p) => p.available);
@@ -360,6 +370,15 @@ export default function Settings() {
             A name shows as Connected only when its key is set on the Turzam server. Keys never live in the app.
           </Text>
 
+          <View style={styles.divider} />
+          <PressableScale onPress={rateUs} style={styles.linkRow} label="Rate Turzam AI">
+            <Ionicons name="star-outline" size={19} color={colors.accentInk} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.linkText}>Rate Turzam AI</Text>
+              <Text style={styles.hint}>Opens Apple’s or Google’s official in-app review prompt.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+          </PressableScale>
           <View style={styles.divider} />
           <Text style={styles.version}>Version {APP_VERSION}</Text>
         </Animated.View>

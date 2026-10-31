@@ -39,6 +39,7 @@ type Props = {
   onDeleteFolder: (id: string) => void;
   onSearchMessages: (query: string) => Promise<MessageHit[]>;
   onOpenMemory: () => void;
+  onOpenProjects: () => void;
   onOpenSettings: () => void;
 };
 
@@ -225,9 +226,9 @@ export function HistoryDrawer(p: Props) {
               contentContainerStyle={{ paddingVertical: 6 }}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              ListFooterComponent={searching ? <Skeleton height={34} radius={10} style={{ marginTop: 8 }} /> : null}
+              ListFooterComponent={searching ? <Skeleton height={34} radius={10} style={{ marginTop: 8 }} /> : undefined}
               ListEmptyComponent={
-                searching ? null : (
+                searching ? undefined : (
                   <Text style={styles.empty}>{query ? 'Nothing found.' : 'Your chats will appear here.'}</Text>
                 )
               }
@@ -237,7 +238,7 @@ export function HistoryDrawer(p: Props) {
                     <Ionicons name="folder-open-outline" size={16} color={colors.textDim} />
                     <Text style={styles.addFolderText}>New folder</Text>
                   </PressableScale>
-                ) : null
+                ) : undefined
               }
               renderItem={({ item, index }) => {
                 if (item.kind === 'header') return <Text style={styles.header}>{item.label}</Text>;
@@ -310,6 +311,11 @@ export function HistoryDrawer(p: Props) {
             <Text numberOfLines={1} style={styles.email}>
               {p.email}
             </Text>
+            <PressableScale onPress={p.onOpenProjects} style={styles.projectsBtn} label="Open project workspaces">
+              <Ionicons name="layers-outline" size={18} color={colors.accentInk} />
+              <Text style={styles.footerText}>Projects</Text>
+              <Ionicons name="chevron-forward" size={15} color={colors.textFaint} />
+            </PressableScale>
             <View style={styles.footerBtns}>
               <PressableScale onPress={p.onOpenMemory} style={styles.footerBtn} label="Memory">
                 <Ionicons name="albums-outline" size={19} color={colors.text} />
@@ -464,6 +470,7 @@ const make = (t: Theme) =>
     empty: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 14, textAlign: 'center', marginTop: 30 },
     footer: { borderTopWidth: 1, borderTopColor: t.colors.border, paddingTop: 12, gap: 10 },
     email: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 13, paddingHorizontal: 4 },
+    projectsBtn: { flexDirection: 'row', alignItems: 'center', gap: 9, height: 42, paddingHorizontal: 12, borderRadius: radius.md, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border },
     footerBtns: { flexDirection: 'row', gap: 10 },
     footerBtn: {
       flex: 1,

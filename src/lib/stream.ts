@@ -39,6 +39,7 @@ export async function streamChat(opts: {
   provider: string;
   persona?: string;
   search?: boolean;
+  projectId?: string;
   messages: ApiMessage[];
   signal: AbortSignal;
   onText: (text: string) => void;
@@ -49,7 +50,7 @@ export async function streamChat(opts: {
     method: 'POST',
     signal: opts.signal,
     headers: headers(opts.token),
-    body: JSON.stringify({ action: 'chat', mode: opts.mode, provider: opts.provider, persona: opts.persona, search: opts.search === true, messages: opts.messages }),
+    body: JSON.stringify({ action: 'chat', mode: opts.mode, provider: opts.provider, persona: opts.persona, search: opts.search === true, projectId: opts.projectId, messages: opts.messages }),
   });
 
   if (!res.ok) throw new Error(await readError(res as unknown as Response));

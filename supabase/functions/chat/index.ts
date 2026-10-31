@@ -53,6 +53,7 @@ const BUCKET = "attachments";
 const MAX_FILES = 8;
 const MAX_TOTAL_BYTES = 24 * 1024 * 1024;
 const MAX_TEXT_CHARS = 80_000;
+const BILLABLE_ACTIONS = new Set(["chat", "title", "remember", "suggest", "transcribe"]);
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -473,8 +474,40 @@ async function handleChat(supabase: any, userId: string, body: any) {
     .eq("id", userId)
     .maybeSingle();
 
+  let projectName = "";
+  let projectInstructions = "";
+  let projectFiles: InFile[] = [];
+  if (body.projectId !== undefined && body.projectId !== null) {
+    const projectId = typeof body.projectId === "string" ? body.projectId : "";
+    if (!/^[0-9a-f-]{36}$/i.test(projectId)) return json({ error: "This project is unavailable." }, 404);
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("id,name,instructions")
+      .eq("id", projectId)
+      .maybeSingle();
+    if (projectError || !project) return json({ error: "This project is unavailable." }, 404);
+    projectName = String(project.name ?? "").slice(0, 60);
+    projectInstructions = String(project.instructions ?? "").slice(0, 2000).trim();
+    const { data: files, error: filesError } = await supabase
+      .from("project_files")
+      .select("name,mime,path,size")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(6);
+    if (filesError) return json({ error: "Could not load the project's reference files." }, 500);
+    projectFiles = (files ?? [])
+      .filter((file: { path?: string; size?: number }) =>
+        typeof file.path === "string" &&
+        file.path.startsWith(`${userId}/projects/${projectId}/`) &&
+        !file.path.includes("..") &&
+        Number(file.size ?? 0) <= 10 * 1024 * 1024,
+      )
+      .map((file: { name: string; mime: string; path: string }) => ({ name: String(file.name).slice(0, 120), mime: String(file.mime).slice(0, 120), path: file.path }));
+  }
+
   let extra = `\nYou are currently answering through ${PROVIDERS[provider].name} (${PROVIDERS[provider].vendor}). If the user asks which model powers you, say that.`;
   if (profile?.display_name) extra += `\nThe user's name is ${profile.display_name}.`;
+  if (projectName) extra += `\nThe current workspace is "${projectName}". Keep the user's request grounded in this project when relevant.`;
 
   if (profile?.memory_enabled !== false) {
     const { data: mems } = await supabase
@@ -492,6 +525,13 @@ async function handleChat(supabase: any, userId: string, body: any) {
 
   const input: InMessage[] = Array.isArray(body.messages) ? body.messages.slice(-40) : [];
   if (!input.length) return json({ error: "No messages." }, 400);
+  if (projectFiles.length) {
+    const lastUserIndex = input.map((message) => message.role).lastIndexOf("user");
+    if (lastUserIndex >= 0) {
+      const lastUser = input[lastUserIndex];
+      input[lastUserIndex] = { ...lastUser, files: [...(Array.isArray(lastUser.files) ? lastUser.files : []), ...projectFiles].slice(0, MAX_FILES) };
+    }
+  }
   const resolved = await resolveMessages(supabase, userId, input);
 
   const persona = PERSONAS[String(body.persona ?? "")] ?? "";
@@ -500,6 +540,7 @@ async function handleChat(supabase: any, userId: string, body: any) {
   const today = new Date().toISOString().slice(0, 10);
 
   let system = `${BASE_PROMPT}${extra}\nToday's date is ${today}.\n\n${mode.prompt}`;
+  if (projectInstructions) system += `\n\nProject instructions (user-provided context for this workspace):\n<project_instructions>\n${projectInstructions}\n</project_instructions>`;
   if (persona) system += `\n\n${persona}`;
   if (hasImage) system += `\n\n${VISION_PROMPT}`;
   if (custom) {
@@ -698,6 +739,15 @@ Deno.serve(async (req) => {
 
   if (!available().length) {
     return json({ error: "The server has no AI key yet. Add GEMINI_API_KEY (see the README, step 5)." }, 500);
+  }
+
+  if (BILLABLE_ACTIONS.has(String(body.action ?? ""))) {
+    const { data: allowed, error: usageError } = await supabase.rpc("consume_turzam_ai_action");
+    if (usageError) {
+      console.error("AI usage limit check failed", usageError.message);
+      return json({ error: "AI usage protection is not ready. Run the latest supabase/schema.sql, then redeploy the chat function." }, 503);
+    }
+    if (allowed !== true) return json({ error: "You've reached today's Turzam AI usage limit. Please try again after the daily reset." }, 429);
   }
 
   try {

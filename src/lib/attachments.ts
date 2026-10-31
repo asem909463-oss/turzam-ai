@@ -145,12 +145,25 @@ export async function uploadAttachment(userId: string, convId: string, f: Picked
   return { id: uuid(), name: f.name, mime: f.mime, size: buf.byteLength, path, uri: f.uri };
 }
 
+/** Removes only the supplied paths; useful when a multi-file send fails part-way through. */
+export async function purgeAttachmentPaths(paths: string[]): Promise<void> {
+  const safePaths = paths.filter((path) => typeof path === 'string' && path.length > 0 && !path.includes('..'));
+  if (!safePaths.length) return;
+  const { error } = await supabase.storage.from(BUCKET).remove(safePaths);
+  if (error) throw new Error(`Could not clean up uploaded files: ${error.message}`);
+}
+
 /** Removes every uploaded file of a conversation (best effort). */
 export async function purgeConversationFiles(userId: string, convId: string): Promise<void> {
   try {
     const folder = `${userId}/${convId}`;
-    const { data } = await supabase.storage.from(BUCKET).list(folder, { limit: 100 });
-    if (data?.length) await supabase.storage.from(BUCKET).remove(data.map((o) => `${folder}/${o.name}`));
+    while (true) {
+      const { data, error } = await supabase.storage.from(BUCKET).list(folder, { limit: 100 });
+      if (error || !data?.length) break;
+      const { error: removeError } = await supabase.storage.from(BUCKET).remove(data.map((o) => `${folder}/${o.name}`));
+      if (removeError) break;
+      if (data.length < 100) break;
+    }
   } catch {
     // ignore: the database rows are what matters
   }
