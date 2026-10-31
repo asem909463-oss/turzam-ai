@@ -117,9 +117,20 @@ create policy "profiles own" on public.profiles
   for all using (id = auth.uid()) with check (id = auth.uid());
 
 drop policy if exists "conversations own" on public.conversations;
+-- Repair invalid legacy folder links before the stricter write check is installed.
+update public.conversations c
+set folder_id = null
+where c.folder_id is not null
+  and not exists (
+    select 1 from public.folders f
+    where f.id = c.folder_id and f.user_id = c.user_id
+  );
 create policy "conversations own" on public.conversations
   for all using (user_id = auth.uid()) with check (
     user_id = auth.uid()
+    and (public.conversations.folder_id is null or exists (
+      select 1 from public.folders f where f.id = public.conversations.folder_id and f.user_id = auth.uid()
+    ))
     and (public.conversations.project_id is null or exists (select 1 from public.projects p where p.id = public.conversations.project_id and p.user_id = auth.uid()))
   );
 
@@ -206,8 +217,8 @@ create policy "attachments delete own" on storage.objects
 
 
 -- ---------- Usage limits (v1.3) ----------
--- One row per AI call. Nobody can read or write this table directly; only consume_quota() touches it,
--- and it always works on the signed-in user (auth.uid()), never on a user id passed in.
+-- One row per AI call. No API client can read or write this table or execute consume_quota().
+-- Only trusted Edge Functions call the RPC with a verified user ID and server-side limits.
 
 create table if not exists public.usage_events (
   id bigint generated always as identity primary key,
@@ -218,39 +229,47 @@ create table if not exists public.usage_events (
 create index if not exists usage_events_lookup on public.usage_events (user_id, kind, created_at desc);
 create index if not exists usage_events_global on public.usage_events (kind, created_at desc);
 alter table public.usage_events enable row level security;
-revoke all on public.usage_events from anon, authenticated;
+revoke all on public.usage_events from public, anon, authenticated, service_role;
 
 -- Returns {"ok": true} and records the call, or {"ok": false, "reason": "minute"|"day", "retry_after": seconds}.
--- The limits come from the Edge Function (secrets LIMIT_*), but are capped here so nobody can fill the table.
+-- The Edge Function supplies limits from server secrets. Execution is service_role-only; the public API roles
+-- cannot choose another user's ID, change their own counters, or burn the global cap.
 drop function if exists public.consume_quota(text, int, int);
-create or replace function public.consume_quota(p_kind text, p_per_minute int, p_per_day int, p_global_per_day int default null)
+drop function if exists public.consume_quota(text, int, int, int);
+create or replace function public.consume_quota(
+  p_user_id uuid,
+  p_kind text,
+  p_per_minute int,
+  p_per_day int,
+  p_global_per_day int default null
+)
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog
 as $$
 declare
-  uid uuid := auth.uid();
   per_min int := least(greatest(coalesce(p_per_minute, 1), 1), 120);
   per_day int := least(greatest(coalesce(p_per_day, 1), 1), 5000);
+  global_day int := case when p_global_per_day is null then null else least(greatest(p_global_per_day, 1), 10000000) end;
   n_min int;
   n_day int;
   oldest timestamptz;
   n_all int;
 begin
-  if uid is null then
+  if p_user_id is null then
     return jsonb_build_object('ok', false, 'reason', 'auth', 'retry_after', 60);
   end if;
-  if p_kind not in ('chat', 'search', 'aux', 'transcribe', 'delete') then
+  if p_kind is null or p_kind not in ('chat', 'search', 'aux', 'transcribe', 'delete') then
     return jsonb_build_object('ok', false, 'reason', 'kind', 'retry_after', 60);
   end if;
 
-  perform pg_advisory_xact_lock(hashtextextended(uid::text || ':' || p_kind, 0));
-  delete from public.usage_events where user_id = uid and created_at < now() - interval '2 days';
+  perform pg_advisory_xact_lock(hashtextextended(p_user_id::text || ':' || p_kind, 0));
+  delete from public.usage_events where user_id = p_user_id and created_at < now() - interval '2 days';
 
   select count(*), min(created_at) into n_min, oldest
     from public.usage_events
-    where user_id = uid and kind = p_kind and created_at > now() - interval '1 minute';
+    where user_id = p_user_id and kind = p_kind and created_at > now() - interval '1 minute';
   if n_min >= per_min then
     return jsonb_build_object('ok', false, 'reason', 'minute',
       'retry_after', greatest(1, ceil(extract(epoch from (oldest + interval '1 minute' - now())))::int));
@@ -258,7 +277,7 @@ begin
 
   select count(*), min(created_at) into n_day, oldest
     from public.usage_events
-    where user_id = uid and kind = p_kind and created_at > now() - interval '1 day';
+    where user_id = p_user_id and kind = p_kind and created_at > now() - interval '1 day';
   if n_day >= per_day then
     return jsonb_build_object('ok', false, 'reason', 'day',
       'retry_after', greatest(1, ceil(extract(epoch from (oldest + interval '1 day' - now())))::int));
@@ -268,18 +287,18 @@ begin
   -- Without a lock, many users checking at the same moment would all see "under the cap" and all insert.
   -- This transaction-level lock (one per action type, released automatically at commit) makes the
   -- count-then-insert below happen one caller at a time. Lock order is always user lock, then global lock.
-  if p_global_per_day is not null then
+  if global_day is not null then
     perform pg_advisory_xact_lock(hashtextextended('global:' || p_kind, 0));
     select count(*) into n_all from public.usage_events where kind = p_kind and created_at > now() - interval '1 day';
-    if n_all >= p_global_per_day then
+    if n_all >= global_day then
       return jsonb_build_object('ok', false, 'reason', 'global', 'retry_after', 300);
     end if;
   end if;
 
-  insert into public.usage_events (user_id, kind) values (uid, p_kind);
+  insert into public.usage_events (user_id, kind) values (p_user_id, p_kind);
   return jsonb_build_object('ok', true);
 end;
 $$;
 
-revoke all on function public.consume_quota(text, int, int, int) from public, anon;
-grant execute on function public.consume_quota(text, int, int, int) to authenticated;
+revoke all on function public.consume_quota(uuid, text, int, int, int) from public, anon, authenticated;
+grant execute on function public.consume_quota(uuid, text, int, int, int) to service_role;

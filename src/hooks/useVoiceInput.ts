@@ -8,9 +8,23 @@ const SPEECH_DB = -38; // louder than this counts as speech
 const SILENCE_MS = 1400; // quiet this long after speech = finished talking
 const MAX_MS = 60_000;
 
+async function restoreAudioMode() {
+  await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+}
+
+function removeTemporaryRecording(uri: string | null | undefined) {
+  if (!uri) return;
+  try {
+    new File(uri).delete();
+  } catch {
+    // The recorder may not have created the file, or the OS may already have removed it.
+  }
+}
+
 /**
  * Records the microphone and turns it into text on the server (Gemini).
- * Stops by itself after you finish speaking, or when `stopAndTranscribe` is called.
+ * Stops by itself after the person finishes speaking, or when `stopAndTranscribe` is called.
+ * Temporary recording files are removed after use and whenever the overlay is dismissed.
  */
 export function useVoiceInput(opts: { lang?: string; onText: (text: string) => void; onError: (msg: string) => void }) {
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
@@ -23,25 +37,32 @@ export function useVoiceInput(opts: { lang?: string; onText: (text: string) => v
   const lastLoudRef = useRef(0);
   const startedRef = useRef(0);
   const activeRef = useRef(false);
+  const startAttemptRef = useRef(0);
   const optsRef = useRef(opts);
   optsRef.current = opts;
 
   const finish = useCallback(
     async (discard: boolean) => {
-      if (!activeRef.current) return;
+      // Also invalidates a permission/prepare operation that has not started recording yet.
+      startAttemptRef.current += 1;
+      if (!activeRef.current) {
+        await restoreAudioMode();
+        return;
+      }
       activeRef.current = false;
       setListening(false);
       setLevel(0);
-      let uri: string | null = null;
+      let uri: string | null = recorder.uri;
       try {
         await recorder.stop();
-        uri = recorder.uri;
+        uri = recorder.uri ?? uri;
       } catch {
-        // already stopped
+        // Already stopped; still clean up the last known URI below.
       }
-      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+      await restoreAudioMode();
       if (discard || !uri || !heardRef.current) {
         if (!discard) optsRef.current.onText('');
+        removeTemporaryRecording(uri);
         return;
       }
       setTranscribing(true);
@@ -56,21 +77,34 @@ export function useVoiceInput(opts: { lang?: string; onText: (text: string) => v
         optsRef.current.onError(e instanceof Error ? e.message : 'Could not understand the recording.');
       } finally {
         setTranscribing(false);
+        removeTemporaryRecording(uri);
       }
     },
     [recorder],
   );
 
   const start = useCallback(async () => {
-    if (activeRef.current) return;
+    if (activeRef.current || transcribing) return;
+    const attempt = ++startAttemptRef.current;
+    const isCurrentAttempt = () => startAttemptRef.current === attempt;
     try {
       const perm = await AudioModule.requestRecordingPermissionsAsync();
+      if (!isCurrentAttempt()) return;
       if (!perm.granted) {
         optsRef.current.onError('Allow microphone access in your phone settings to talk to Turzam.');
         return;
       }
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      if (!isCurrentAttempt()) {
+        await restoreAudioMode();
+        return;
+      }
       await recorder.prepareToRecordAsync();
+      if (!isCurrentAttempt()) {
+        removeTemporaryRecording(recorder.uri);
+        await restoreAudioMode();
+        return;
+      }
       heardRef.current = false;
       startedRef.current = Date.now();
       lastLoudRef.current = Date.now();
@@ -79,9 +113,11 @@ export function useVoiceInput(opts: { lang?: string; onText: (text: string) => v
       setListening(true);
     } catch (e) {
       activeRef.current = false;
-      optsRef.current.onError(e instanceof Error ? e.message : 'Could not start the microphone.');
+      removeTemporaryRecording(recorder.uri);
+      await restoreAudioMode();
+      if (isCurrentAttempt()) optsRef.current.onError(e instanceof Error ? e.message : 'Could not start the microphone.');
     }
-  }, [recorder]);
+  }, [recorder, transcribing]);
 
   // Watch the volume: animate, and auto-stop once the person has spoken and then gone quiet.
   useEffect(() => {
@@ -100,9 +136,20 @@ export function useVoiceInput(opts: { lang?: string; onText: (text: string) => v
 
   useEffect(
     () => () => {
+      startAttemptRef.current += 1;
       if (activeRef.current) {
         activeRef.current = false;
-        recorder.stop().catch(() => {});
+        void (async () => {
+          let uri: string | null = recorder.uri;
+          try {
+            await recorder.stop();
+            uri = recorder.uri ?? uri;
+          } catch {
+            // Already stopped.
+          }
+          await restoreAudioMode();
+          removeTemporaryRecording(uri);
+        })();
       }
     },
     [recorder],

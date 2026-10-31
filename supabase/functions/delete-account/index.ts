@@ -1,8 +1,7 @@
 // Turzam AI: permanent account deletion.
 //
-// This is the ONLY code that uses the Supabase service-role key, and it is kept in its own function
-// on purpose: the chat function never sees it. The key is injected by Supabase automatically
-// (SUPABASE_SERVICE_ROLE_KEY); you do not add it anywhere.
+// The service-role key is used only for the quota RPC and final account/storage deletion.
+// The key is injected by Supabase automatically (SUPABASE_SERVICE_ROLE_KEY); never add it to the app.
 //
 // Safety checks, in order:
 //   1. The caller must be signed in (verify_jwt + getUser).
@@ -13,8 +12,8 @@
 //   5. The auth user is deleted last. Database rows (profile, chats, messages, memories, folders, usage)
 //      are removed by "on delete cascade" in schema.sql.
 
-import { createClient } from "npm:@supabase/supabase-js@2";
-import { quotaFor } from "../_shared/limits.ts";
+import { createClient } from "@supabase/supabase-js";
+import { globalPerDay, quotaFor, readJsonLimited } from "../_shared/limits.ts";
 
 const BUCKET = "attachments";
 const env = (k: string) => Deno.env.get(k) ?? "";
@@ -62,36 +61,46 @@ Deno.serve(async (req) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   const { data: auth, error: authError } = await userClient.auth.getUser();
-  if (authError || !auth.user || !auth.user.email) return json({ error: "Please sign in again." }, 401);
+  const email = auth.user?.email;
+  if (authError || !auth.user || !email) return json({ error: "Please sign in again." }, 401);
   const user = auth.user;
+  const admin = createClient(url, service, { auth: { persistSession: false, autoRefreshToken: false } });
 
-  // deno-lint-ignore no-explicit-any
-  let body: any;
-  try {
-    body = await req.json();
-  } catch (_) {
-    return json({ error: "Bad request." }, 400);
+  const maxBodyBytes = 16_384;
+  const declared = req.headers.get("content-length");
+  if (declared && /^\d+$/.test(declared) && Number(declared) > maxBodyBytes) {
+    return json({ error: "That request is too large." }, 413);
   }
+  const parsed = await readJsonLimited(req, maxBodyBytes);
+  if (!parsed.ok) {
+    return parsed.error === "too_large"
+      ? json({ error: "That request is too large." }, 413)
+      : json({ error: "Bad request." }, 400);
+  }
+  // deno-lint-ignore no-explicit-any
+  const body: any = parsed.value;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Bad request." }, 400);
   const password = typeof body?.password === "string" ? body.password : "";
   if (body?.confirm !== "DELETE" || !password || password.length > 200) {
     return json({ error: "Type DELETE and your password to confirm." }, 400);
   }
 
   const q = quotaFor("delete", env);
-  const { data: quota, error: quotaError } = await userClient.rpc("consume_quota", {
+  const { data: quota, error: quotaError } = await admin.rpc("consume_quota", {
+    p_user_id: user.id,
     p_kind: "delete",
     p_per_minute: q.perMinute,
     p_per_day: q.perDay,
+    p_global_per_day: globalPerDay("delete", env),
   });
   if (quotaError || !quota) return json({ error: "Usage limits are not set up. Run the latest supabase/schema.sql." }, 500);
   if (quota.ok !== true) return json({ error: "Too many attempts. Please wait a few minutes." }, 429);
 
   // Check the password with a throwaway client so the caller's own session is not touched.
   const verifier = createClient(url, anon, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { error: pwError } = await verifier.auth.signInWithPassword({ email: user.email, password });
+  const { error: pwError } = await verifier.auth.signInWithPassword({ email, password });
   if (pwError) return json({ error: "That password is not correct." }, 403);
 
-  const admin = createClient(url, service, { auth: { persistSession: false, autoRefreshToken: false } });
   try {
     await removeFolder(admin, user.id);
   } catch (e) {

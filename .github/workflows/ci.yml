@@ -2,7 +2,7 @@ name: Checks
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
 
 jobs:
@@ -15,18 +15,13 @@ jobs:
         with:
           node-version: 22
       - name: Install packages
-        run: |
-          if [ -f package-lock.json ]; then npm ci; else echo "::warning::No package-lock.json yet. See README, 'Pin versions'."; npm install; fi
+        run: npm ci
       - name: Type-check the app
         run: npm run typecheck
       - name: Dependencies pinned and lockfile present
-        # Mandatory as soon as package-lock.json exists. Until then it only warns (see README, "Pin versions").
-        run: |
-          if [ -f package-lock.json ]; then
-            npm run check:pinned
-          else
-            echo "::warning::No package-lock.json yet, so pinning is not enforced. See README, 'Pin versions'."
-          fi
+        run: npm run check:pinned
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
       - name: No secrets in the repository
         run: npm run check:secrets
 
@@ -40,11 +35,11 @@ jobs:
           node-version: 22
       - uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.x
+          deno-version: v2.9.8
       - name: Unit tests (limits, validation, Gemini settings)
         run: npm run test:edge
       - name: Type-check the functions
-        run: deno check supabase/functions/chat/index.ts supabase/functions/delete-account/index.ts
+        run: deno check --frozen supabase/functions/chat/index.ts supabase/functions/delete-account/index.ts
       - name: Lint the functions
         run: deno lint supabase/functions
 
