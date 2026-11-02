@@ -14,6 +14,7 @@ export const supabase = createClient(
       autoRefreshToken: true,
       persistSession: true,
       detectSessionInUrl: false,
+      flowType: 'pkce', // required for Google / Apple sign-in (one-time code, no tokens in the link)
     },
   },
 );

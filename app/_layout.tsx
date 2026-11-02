@@ -45,6 +45,9 @@ function Gate() {
           animation: 'slide_from_right',
         }}
       >
+        {/* Reachable signed in or out: legal texts and the Google / Apple sign-in return link */}
+        <Stack.Screen name="legal" />
+        <Stack.Screen name="auth-callback" options={{ animation: 'fade' }} />
         <Stack.Protected guard={needsSetup}>
           <Stack.Screen name="setup" />
         </Stack.Protected>

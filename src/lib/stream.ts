@@ -150,8 +150,8 @@ export async function callFunction<T>(token: string, body: Record<string, unknow
 }
 
 /** Permanently deletes the account (server checks the password). */
-export async function deleteAccountRequest(token: string, password: string): Promise<void> {
-  await post<{ deleted: boolean }>(DELETE_URL, token, { confirm: 'DELETE', password }, 60_000);
+export async function deleteAccountRequest(token: string, password: string | null): Promise<void> {
+  await post<{ deleted: boolean }>(DELETE_URL, token, password === null ? { confirm: 'DELETE' } : { confirm: 'DELETE', password }, 60_000);
 }
 
 async function post<T>(url: string, token: string, body: Record<string, unknown>, timeoutMs: number): Promise<T> {

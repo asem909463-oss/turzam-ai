@@ -83,6 +83,9 @@ export default function Settings() {
   const { user, profile, updateProfile, signOut } = useAuth();
   const { providers, error: providersError, refresh } = useProviders();
   const [name, setName] = useState(profile?.display_name ?? '');
+  // People who signed up with Google or Apple have no Turzam password.
+  const signInMethods = (user?.app_metadata?.providers as string[] | undefined) ?? [];
+  const hasPassword = signInMethods.length === 0 || signInMethods.includes('email');
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -125,7 +128,7 @@ export default function Settings() {
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
       if (!token) throw new Error('Please sign in again.');
-      await deleteAccountRequest(token, password);
+      await deleteAccountRequest(token, hasPassword ? password : null);
       setDeleteOpen(false);
       toast.show('Your account was deleted', 'success');
       await signOut(); // clears the local session; the sign-in screen appears
@@ -414,12 +417,30 @@ export default function Settings() {
             <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
           </PressableScale>
           <View style={styles.divider} />
+          {([
+            ['terms', 'document-text-outline', 'Terms and Conditions'],
+            ['privacy', 'shield-checkmark-outline', 'Privacy Policy'],
+            ['cookies', 'finger-print-outline', 'Cookie Policy'],
+          ] as const).map(([doc, icon, label]) => (
+            <PressableScale
+              key={doc}
+              onPress={() => router.push({ pathname: '/legal', params: { doc } })}
+              style={styles.linkRow}
+              label={label}
+            >
+              <Ionicons name={icon} size={19} color={colors.accentInk} />
+              <Text style={styles.linkText}>{label}</Text>
+              <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+            </PressableScale>
+          ))}
+          <View style={styles.divider} />
           <Text style={styles.version}>Version {APP_VERSION}</Text>
         </Animated.View>
       </ScrollView>
       <DeleteAccountModal
         visible={deleteOpen}
         busy={deleting}
+        needsPassword={hasPassword}
         error={deleteError}
         onCancel={() => setDeleteOpen(false)}
         onConfirm={deleteAccount}

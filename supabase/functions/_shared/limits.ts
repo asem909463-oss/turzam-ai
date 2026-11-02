@@ -230,3 +230,20 @@ export function providerErrorMessage(name: string, status: number): string {
 }
 
 export const isTransient = (status: number) => status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || status === 529;
+
+/** How a delete-account request must prove it is really the owner. */
+export const RECENT_SIGN_IN_MS = 10 * 60 * 1000;
+
+export type DeleteProof = "password" | "recent_sign_in" | "sign_in_again";
+
+/**
+ * Accounts with an email+password identity must retype the password.
+ * Google / Apple accounts have no password, so they must have signed in within the last 10 minutes.
+ */
+export function deleteProof(providers: unknown, lastSignInAt: unknown, now: number): DeleteProof {
+  const list = Array.isArray(providers) ? providers.filter((p): p is string => typeof p === "string") : [];
+  if (list.length === 0 || list.includes("email")) return "password";
+  const at = typeof lastSignInAt === "string" ? Date.parse(lastSignInAt) : NaN;
+  if (!Number.isFinite(at) || now - at > RECENT_SIGN_IN_MS || at - now > 60_000) return "sign_in_again";
+  return "recent_sign_in";
+}

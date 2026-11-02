@@ -5,15 +5,16 @@
 //
 // Safety checks, in order:
 //   1. The caller must be signed in (verify_jwt + getUser).
-//   2. They must retype their password (verified against Supabase Auth) and the word DELETE,
-//      so a stolen or left-open session cannot erase an account.
+//   2. They must type the word DELETE and prove it is them: password accounts retype the password
+//      (verified against Supabase Auth); Google / Apple accounts have no password, so they must have
+//      signed in within the last 10 minutes. A stolen or left-open session cannot erase an account.
 //   3. At most 3 attempts per minute and 5 per day (consume_quota).
 //   4. All of the user's files are removed first; if that fails nothing else is deleted, so they can retry.
 //   5. The auth user is deleted last. Database rows (profile, chats, messages, memories, folders, usage)
 //      are removed by "on delete cascade" in schema.sql.
 
 import { createClient } from "@supabase/supabase-js";
-import { globalPerDay, quotaFor, readJsonLimited } from "../_shared/limits.ts";
+import { deleteProof, globalPerDay, quotaFor, readJsonLimited } from "../_shared/limits.ts";
 
 const BUCKET = "attachments";
 const env = (k: string) => Deno.env.get(k) ?? "";
@@ -62,7 +63,7 @@ Deno.serve(async (req) => {
   });
   const { data: auth, error: authError } = await userClient.auth.getUser();
   const email = auth.user?.email;
-  if (authError || !auth.user || !email) return json({ error: "Please sign in again." }, 401);
+  if (authError || !auth.user) return json({ error: "Please sign in again." }, 401);
   const user = auth.user;
   const admin = createClient(url, service, { auth: { persistSession: false, autoRefreshToken: false } });
 
@@ -81,8 +82,11 @@ Deno.serve(async (req) => {
   const body: any = parsed.value;
   if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Bad request." }, 400);
   const password = typeof body?.password === "string" ? body.password : "";
-  if (body?.confirm !== "DELETE" || !password || password.length > 200) {
-    return json({ error: "Type DELETE and your password to confirm." }, 400);
+  const proof = deleteProof(user.app_metadata?.providers, user.last_sign_in_at, Date.now());
+  if (body?.confirm !== "DELETE" || password.length > 200) return json({ error: "Type DELETE to confirm." }, 400);
+  if (proof === "password" && (!password || !email)) return json({ error: "Type DELETE and your password to confirm." }, 400);
+  if (proof === "sign_in_again") {
+    return json({ error: "For safety, please sign out, sign in again, and then delete your account." }, 403);
   }
 
   const q = quotaFor("delete", env);
@@ -96,10 +100,12 @@ Deno.serve(async (req) => {
   if (quotaError || !quota) return json({ error: "Usage limits are not set up. Run the latest supabase/schema.sql." }, 500);
   if (quota.ok !== true) return json({ error: "Too many attempts. Please wait a few minutes." }, 429);
 
-  // Check the password with a throwaway client so the caller's own session is not touched.
-  const verifier = createClient(url, anon, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { error: pwError } = await verifier.auth.signInWithPassword({ email, password });
-  if (pwError) return json({ error: "That password is not correct." }, 403);
+  if (proof === "password") {
+    // Check the password with a throwaway client so the caller's own session is not touched.
+    const verifier = createClient(url, anon, { auth: { persistSession: false, autoRefreshToken: false } });
+    const { error: pwError } = await verifier.auth.signInWithPassword({ email: email as string, password });
+    if (pwError) return json({ error: "That password is not correct." }, 403);
+  }
 
   try {
     await removeFolder(admin, user.id);

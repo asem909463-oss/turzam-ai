@@ -195,10 +195,24 @@ eas submit --platform all
 ```
 Change `com.turzam.ai` in `app.json` to your own bundle id first.
 
+## Google and Apple sign-in, and legal pages
+
+The sign-in screen has **Continue with Google** and **Continue with Apple** buttons. They work through Supabase, so no new keys go in the app. Until you switch a provider on in Supabase, tapping its button shows a clear "not switched on yet" message.
+
+1. **Redirect URL (both providers):** Supabase, Authentication, URL Configuration, Redirect URLs, add `turzam://auth-callback`. While testing in Expo Go also add the `exp://.../--/auth-callback` address that Expo shows.
+2. **Google:** Google Cloud Console, APIs & Services, Credentials, create an **OAuth client ID** of type **Web application**. Add the redirect URI `https://YOUR-PROJECT-REF.supabase.co/auth/v1/callback`. Copy the Client ID and Client Secret into Supabase, Authentication, Sign In / Providers, **Google**, and switch it on.
+3. **Apple:** needs a paid Apple Developer account. Create a Services ID, enable Sign in with Apple, set the same Supabase callback URL, then paste the Services ID and the generated secret key into Supabase, Authentication, Sign In / Providers, **Apple**. Apple secret keys expire after at most 6 months, so set a reminder to renew it. Apple requires Sign in with Apple whenever an app offers Google sign-in, so keep both.
+4. These Google and Apple secrets go **only into the Supabase dashboard**, never into `.env` or the app.
+
+People who sign in with Google or Apple have no Turzam password, so **Delete account** asks them only to type DELETE, and only works if they signed in within the last 10 minutes (otherwise it asks them to sign in again). Apple also expects the app to revoke its sign-in token when an account is deleted; that extra step is not built yet (see Known limits).
+
+**Legal pages:** Terms and Conditions, Privacy Policy and Cookie Policy are in `src/legal.ts`, shown under Settings, About and linked from the sign-in screen. They are a plain-language template that matches what the app does (no cookies or trackers; local storage only). **Have a lawyer review them and set your contact email** (`EXPO_PUBLIC_SUPPORT_EMAIL` in `.env`) before you publish, and change `LEGAL_UPDATED` whenever the text changes. If you later add analytics or ads, update the Cookie Policy and add a consent prompt first.
+
 ## Known limits
 
 - Per-user quotas do not stop someone creating many accounts. Set `GLOBAL_CHAT_PER_DAY` (and the SEARCH / TRANSCRIBE ones) in `supabase/.env` as a total daily cap, turn on **Confirm email** in Supabase (Authentication, Providers, Email), and enable CAPTCHA under Authentication, Attack Protection before a public launch.
 - Account deletion removes your data in this app's Supabase project. It does not delete anything already sent to Google, OpenAI or Anthropic (see their own policies).
 - Web-search sources come as Google redirect links; they open the real page.
 - Voice replies use the phone's voice for the language chosen in Settings; the app cannot detect the answer's language.
+- Deleting an account that signed in with Apple does not yet revoke the Apple token (Apple asks for this before App Store approval).
 - In-app toasts are included; push notifications are not.

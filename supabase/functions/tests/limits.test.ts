@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  deleteProof,
   geminiAcceptsTemperature,
   globalPerDay,
   geminiThinkingLevel,
@@ -145,4 +146,15 @@ test("global daily cap is off unless the secret is set", () => {
   assert.equal(globalPerDay("chat", noEnv), null);
   assert.equal(globalPerDay("chat", () => "0"), null);
   assert.equal(globalPerDay("chat", (k) => (k === "GLOBAL_CHAT_PER_DAY" ? "3000" : "")), 3000);
+});
+
+test("delete proof: password accounts retype the password, social accounts need a recent sign-in", () => {
+  const now = Date.parse("2026-11-02T10:00:00Z");
+  assert.equal(deleteProof(["email"], "2020-01-01T00:00:00Z", now), "password");
+  assert.equal(deleteProof(["google", "email"], "2020-01-01T00:00:00Z", now), "password");
+  assert.equal(deleteProof(undefined, null, now), "password");
+  assert.equal(deleteProof(["google"], "2026-11-02T09:55:00Z", now), "recent_sign_in");
+  assert.equal(deleteProof(["apple"], "2026-11-02T09:40:00Z", now), "sign_in_again");
+  assert.equal(deleteProof(["apple"], null, now), "sign_in_again");
+  assert.equal(deleteProof(["google"], "2026-11-02T11:00:00Z", now), "sign_in_again");
 });

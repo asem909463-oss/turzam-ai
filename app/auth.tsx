@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Aurora } from '../src/components/Aurora';
 import { Field } from '../src/components/Field';
@@ -14,7 +16,8 @@ import { useStyles, useTheme } from '../src/context/ThemeContext';
 import { fonts, radius, Theme, withAlpha } from '../src/theme';
 
 export default function AuthScreen() {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, signInWithProvider } = useAuth();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const styles = useStyles(make);
@@ -22,6 +25,7 @@ export default function AuthScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [socialBusy, setSocialBusy] = useState<'google' | 'apple' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -39,6 +43,16 @@ export default function AuthScreen() {
       withTiming(8, { duration: 55 }),
       withTiming(0, { duration: 55 }),
     );
+  }
+
+  async function social(provider: 'google' | 'apple') {
+    if (busy || socialBusy) return;
+    setError(null);
+    setInfo(null);
+    setSocialBusy(provider);
+    const err = await signInWithProvider(provider);
+    setSocialBusy(null);
+    if (err) fail(err);
   }
 
   async function submit() {
@@ -117,6 +131,46 @@ export default function AuthScreen() {
               </Animated.Text>
             ) : null}
             <GradientButton title={isSignUp ? 'Create account' : 'Sign in'} onPress={submit} loading={busy} />
+
+            <View style={styles.orRow}>
+              <View style={styles.orLine} />
+              <Text style={styles.orText}>or</Text>
+              <View style={styles.orLine} />
+            </View>
+            <PressableScale
+              onPress={() => social('google')}
+              disabled={busy || socialBusy !== null}
+              style={styles.socialBtn}
+              label="Continue with Google"
+            >
+              <Ionicons name="logo-google" size={19} color={colors.text} />
+              <Text style={styles.socialText}>{socialBusy === 'google' ? 'Opening Google…' : 'Continue with Google'}</Text>
+            </PressableScale>
+            <PressableScale
+              onPress={() => social('apple')}
+              disabled={busy || socialBusy !== null}
+              style={styles.socialBtn}
+              label="Continue with Apple"
+            >
+              <Ionicons name="logo-apple" size={21} color={colors.text} />
+              <Text style={styles.socialText}>{socialBusy === 'apple' ? 'Opening Apple…' : 'Continue with Apple'}</Text>
+            </PressableScale>
+
+            <Text style={styles.consent}>
+              By continuing you agree to our{' '}
+              <Text style={styles.consentLink} onPress={() => router.push({ pathname: '/legal', params: { doc: 'terms' } })}>
+                Terms
+              </Text>
+              ,{' '}
+              <Text style={styles.consentLink} onPress={() => router.push({ pathname: '/legal', params: { doc: 'privacy' } })}>
+                Privacy Policy
+              </Text>{' '}
+              and{' '}
+              <Text style={styles.consentLink} onPress={() => router.push({ pathname: '/legal', params: { doc: 'cookies' } })}>
+                Cookie Policy
+              </Text>
+              .
+            </Text>
           </Animated.View>
 
           <Animated.View entering={FadeInDown.delay(440).duration(500)}>
@@ -158,6 +212,23 @@ const make = (t: Theme) =>
     cardTitle: { color: t.colors.text, fontFamily: fonts.display, fontSize: 28 },
     error: { color: t.colors.danger, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 },
     info: { color: t.colors.success, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 },
+    orRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    orLine: { flex: 1, height: 1, backgroundColor: t.colors.border },
+    orText: { color: t.colors.textFaint, fontFamily: fonts.ui, fontSize: 13 },
+    socialBtn: {
+      height: 50,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 10,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: t.colors.borderStrong,
+      backgroundColor: t.colors.bgElevated,
+    },
+    socialText: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 15 },
+    consent: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 12.5, lineHeight: 19, textAlign: 'center' },
+    consentLink: { color: t.colors.accentInk, fontFamily: fonts.uiBold },
     switch: { paddingVertical: 12 },
     switchText: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 15 },
   });

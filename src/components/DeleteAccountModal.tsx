@@ -9,12 +9,15 @@ import { fonts, radius, Theme } from '../theme';
 export function DeleteAccountModal({
   visible,
   busy,
+  needsPassword,
   error,
   onCancel,
   onConfirm,
 }: {
   visible: boolean;
   busy: boolean;
+  /** False for accounts that signed in with Google or Apple (no password to retype). */
+  needsPassword: boolean;
   error: string | null;
   onCancel: () => void;
   onConfirm: (password: string) => void;
@@ -31,7 +34,7 @@ export function DeleteAccountModal({
     }
   }, [visible]);
 
-  const ready = word.trim() === 'DELETE' && password.length > 0 && !busy;
+  const ready = word.trim() === 'DELETE' && (!needsPassword || password.length > 0) && !busy;
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={busy ? undefined : onCancel} statusBarTranslucent>
       <Animated.View entering={FadeIn.duration(160)} style={StyleSheet.absoluteFill}>
@@ -53,18 +56,25 @@ export function DeleteAccountModal({
             selectionColor={colors.accent}
             style={styles.input}
           />
-          <TextInput
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholder="Your password"
-            placeholderTextColor={colors.textFaint}
-            selectionColor={colors.accent}
-            onSubmitEditing={() => ready && onConfirm(password)}
-            style={styles.input}
-          />
+          {needsPassword ? (
+            <TextInput
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="Your password"
+              placeholderTextColor={colors.textFaint}
+              selectionColor={colors.accent}
+              onSubmitEditing={() => ready && onConfirm(password)}
+              style={styles.input}
+            />
+          ) : (
+            <Text style={styles.body}>
+              You signed in with Google or Apple. For safety, this only works if you signed in within the last 10 minutes. If it
+              says otherwise, sign out, sign in again, and retry.
+            </Text>
+          )}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <View style={styles.row}>
             <PressableScale label="Cancel" onPress={onCancel} disabled={busy} style={[styles.btn, styles.ghost]}>

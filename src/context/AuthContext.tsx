@@ -1,7 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
+import * as Linking from 'expo-linking';
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../lib/config';
 import { supabase } from '../lib/supabase';
 import type { Profile } from '../types';
+
+export type SocialProvider = 'google' | 'apple';
 
 type AuthState = {
   session: Session | null;
@@ -11,6 +15,8 @@ type AuthState = {
   signIn: (email: string, password: string) => Promise<string | null>;
   /** Returns { error } or { needsConfirm: true } when the email must be confirmed first. */
   signUp: (email: string, password: string) => Promise<{ error?: string; needsConfirm?: boolean }>;
+  /** Opens Google or Apple sign-in in the browser. Returns an error message, or null when the browser was opened. */
+  signInWithProvider: (provider: SocialProvider) => Promise<string | null>;
   signOut: () => Promise<void>;
   /** Returns an error message, or null when saved. */
   updateProfile: (patch: Partial<Omit<Profile, 'id'>>) => Promise<string | null>;
@@ -65,6 +71,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return {};
   }, []);
 
+  const signInWithProvider = useCallback(async (provider: SocialProvider) => {
+    const name = provider === 'google' ? 'Google' : 'Apple';
+    try {
+      // Ask Supabase which sign-in methods are switched on, so we can explain instead of showing a raw error page.
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: SUPABASE_ANON_KEY } });
+      if (res.ok) {
+        const settings = (await res.json()) as { external?: Record<string, boolean> };
+        if (settings.external && settings.external[provider] !== true) {
+          return `${name} sign-in is not switched on yet. In Supabase: Authentication, Sign In / Providers, turn on ${name}.`;
+        }
+      }
+      const redirectTo = Linking.createURL('auth-callback');
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo, skipBrowserRedirect: true },
+      });
+      if (error || !data.url) return error?.message ?? `Could not start ${name} sign-in.`;
+      await Linking.openURL(data.url);
+      return null;
+    } catch {
+      return `Could not start ${name} sign-in. Check your connection and try again.`;
+    }
+  }, []);
+
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
   }, []);
@@ -87,10 +117,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loading,
       signIn,
       signUp,
+      signInWithProvider,
       signOut,
       updateProfile,
     }),
-    [session, profile, loading, signIn, signUp, signOut, updateProfile],
+    [session, profile, loading, signIn, signUp, signInWithProvider, signOut, updateProfile],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
