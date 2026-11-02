@@ -103,9 +103,25 @@ Phone app ──(your login token)──> Supabase Edge Function "chat" ──(s
 - `app/` screens: chat, sign-in, settings (with About), memory, and project workspaces.
 - `src/` components, chat logic (`hooks/useChat.ts`), theme, modes, attachments.
 - `supabase/schema.sql` tables, security rules, private file storage.
-- `supabase/functions/chat/index.ts` is the only code that touches AI provider keys (shared limits and checks are in `supabase/functions/_shared/limits.ts`). Trusted Edge Functions use the service-role key only server-side; chat uses it for the quota RPC, while account deletion uses it for confirmed cleanup. Chat reads attachments with the user's own token, so it cannot read another user's files.
+- `supabase/functions/chat/index.ts` is the only code that touches AI provider keys (shared limits and checks are in `supabase/functions/_shared/limits.ts`). `supabase/functions/subscriptions/index.ts` authenticates users and asks RevenueCat's server API for the signed-in Supabase account's Apple entitlement; the RevenueCat secret never ships in the app. Trusted Edge Functions use the service-role key only server-side for quota RPCs and confirmed account cleanup. Chat reads attachments with the user's own token, so it cannot read another user's files.
 
 Models can be changed any time with `GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL` in `supabase/.env`, then repeat the `secrets set` command. No app update needed.
+
+## Premium subscriptions (Apple In-App Purchase)
+
+The defaults are configurable: Free allows **10 AI chats per six-hour window** (`FREE_CHAT_LIMIT`); Plus is **$5.99/month** and allows **150 chats per rolling 24 hours** (`LIMIT_PLUS_CHAT_PER_DAY`); Pro is **$11.99/month** and allows **500 chats per rolling 24 hours** (`LIMIT_PRO_CHAT_PER_DAY`). Paid plans remove the Free cooldown. Existing per-minute and optional global safety caps still apply. StoreKit's localized product price takes precedence; app `.env` dollar prices are display fallbacks only.
+
+Access is never unlocked from a client flag. The iOS app uses RevenueCat's StoreKit SDK with the authenticated Supabase UUID as its RevenueCat App User ID. After a purchase or restore, and before each chat, a Supabase Edge Function checks RevenueCat's subscriber API for an active Apple subscription matching the configured entitlement and product ID. A private, atomic database function enforces the Free count and six-hour cooldown. The last permitted Free message starts the cooldown and opens the upgrade screen immediately; every blocked send returns the same structured limit result and opens the upgrade screen again. The composer stays disabled until the server reports the actual cooldown has expired or verifies a paid plan.
+
+Before enabling paid buttons, configure the stores and keys:
+
+1. In App Store Connect, create `turzam_plus_monthly` at USD $5.99/month and `turzam_pro_monthly` at USD $11.99/month in one auto-renewable subscription group; rank Pro above Plus. Complete localization, review metadata, and agreements/tax/banking setup.
+2. In RevenueCat, connect the iOS app, add both App Store products, create entitlements `turzam_plus` and `turzam_pro` and attach the matching product to each. Add both monthly products to the current offering. If you change identifiers, update both the app `.env` and Supabase secrets.
+3. Add the **public iOS SDK key** and product IDs to the app `.env` (copy `.env.example`). Add `REVENUECAT_SECRET_API_KEY` plus optional product/entitlement identifier overrides to `supabase/.env` (copy `supabase/.env.example`), then run `npx supabase secrets set --env-file supabase/.env`. Never place the RevenueCat secret in the app or a committed file.
+4. Apply the latest `supabase/schema.sql` in the Supabase SQL editor, then deploy `chat` and `subscriptions` with `npx supabase functions deploy chat` and `npx supabase functions deploy subscriptions`.
+5. Build an iOS development client (`eas build --platform ios --profile development`) and test with an App Store sandbox tester. Expo Go can preview the interface but cannot make real Apple purchases; preview/mock entitlements never grant server access.
+
+Settings includes a verified current-plan indicator, plan screen, Restore Purchases, and Apple subscription management. If RevenueCat server verification or a store product is unavailable, purchase buttons stay disabled; a StoreKit success alone is not considered a Turzam unlock.
 
 ## Extra keys and costs (v1.2)
 
@@ -120,7 +136,7 @@ No new keys are needed. Everything new runs on the **Gemini key you already have
 
 Search and voice input are **Gemini only**. If you only connect ChatGPT or Claude, those two buttons say they need the Gemini key. A natural-sounding cloud voice (OpenAI/ElevenLabs/Google TTS) would need a new paid key and is not included.
 
-**When you choose to roll out an update:** run the latest `supabase/schema.sql` first (it adds project tables, usage limits and folders without deleting existing chats), then deploy the updated `chat` and `delete-account` functions, install with `npm ci`, and verify with `npx expo install --check`. Voice, export and store reviews use Expo native modules; microphone permission text is set in `app.json`, so a custom native build may be required for app changes.
+**When you choose to roll out an update:** run the latest `supabase/schema.sql` first (it adds project tables, usage limits, folders, and subscription state without deleting existing chats), then deploy the updated `chat`, `subscriptions`, and `delete-account` functions, install with `npm ci`, and verify with `npx expo install --check`. Purchases require an iOS development or production native build; Expo Go is not a real payment test environment.
 
 ## Development vs production settings
 
@@ -141,7 +157,7 @@ If you change `supabase/.env`, run `npx supabase secrets set --env-file supabase
 
 All of this is enforced **on the server**, so a modified app cannot get around it.
 
-- **Per-user rate limits** (counted in the database, function `consume_quota`): chat 12 per minute and 150 per day, web search 6 per minute and 40 per day, titles/memory/ideas 30 per minute and 400 per day, voice 10 per minute and 100 per day. Only trusted Edge Functions can execute the quota RPC; API roles cannot manipulate counters or consume the global cap directly. Change limits with `LIMIT_CHAT_PER_DAY` and similar secrets (see `supabase/.env.example`). If you forget to run the latest `schema.sql`, the server refuses requests instead of running without limits.
+- **Per-user rate limits** (counted in the database): Free chat 12 per minute plus the default 10 chats per six-hour window; Plus 12 per minute and 150 per rolling 24 hours; Pro 12 per minute and 500 per rolling 24 hours; web search 6 per minute and 40 per day, titles/memory/ideas 30 per minute and 400 per day, voice 10 per minute and 100 per day. Paid quotas are configurable with `LIMIT_PLUS_CHAT_PER_DAY` and `LIMIT_PRO_CHAT_PER_DAY`; `FREE_CHAT_LIMIT` changes the Free count, while the cooldown remains six hours. Only trusted Edge Functions can execute quota RPCs; API roles cannot manipulate counters or consume the global cap directly. If you forget to run the latest `schema.sql`, the server refuses requests instead of running without limits.
 - **Total daily cap (optional):** `GLOBAL_CHAT_PER_DAY` and similar secrets stop the whole app at a daily number of calls, whoever makes them. Off until you set it. The check-then-count runs under a database lock per action type, so many users hitting it in the same instant cannot push it past the cap (proved by `npm run test:quota`).
 - **Input checks:** messages up to 12,000 characters, at most 40 messages and 120,000 characters of history per request, unknown modes/personalities ignored, malformed files dropped.
 - **Answer size:** `MAX_OUTPUT_TOKENS` (default 4096). Gemini 3.x counts its thinking in the same limit, so the server adds room for it. Gemini thinking defaults to `low` (cheapest); set `GEMINI_THINKING_LEVEL=medium` for better answers at higher cost. Gemini 3.x is run at its default temperature, as Google recommends.

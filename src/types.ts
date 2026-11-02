@@ -64,6 +64,7 @@ export type Profile = {
   custom_instructions?: string;
   voice_reply?: boolean;
   voice_lang?: string;
+  premium_welcome_seen_at?: string | null;
 };
 
 export type Memory = {

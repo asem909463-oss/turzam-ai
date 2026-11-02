@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { usePrefs } from '../context/ThemeContext';
 import { fileKind, purgeConversationFiles, removeStoredFiles, uploadAttachments } from '../lib/attachments';
 import { supabase } from '../lib/supabase';
-import { ApiMessage, callFunction, streamChat } from '../lib/stream';
+import { ApiMessage, callFunction, FreeChatLimitError, streamChat } from '../lib/stream';
 import { uuid } from '../lib/utils';
 import type { MessageHit } from '../components/HistoryDrawer';
 import type { Attachment, ChatMessage, Conversation, Folder, ModeId, ModelChoice, PersonaId, PickedFile, ProviderId, Source } from '../types';
@@ -41,13 +41,17 @@ function usable(m: ChatMessage): boolean {
   return !m.error && (!!m.content || !!m.attachments?.length);
 }
 
-export function useChat(opts?: { onAnswer?: (text: string) => void }) {
+export function useChat(opts?: { onAnswer?: (text: string) => void; onFreeLimit?: (cooldownUntil: string | null) => void }) {
   const { profile } = useAuth();
   const { prefs } = usePrefs();
   const onAnswerRef = useRef(opts?.onAnswer);
+  const onFreeLimitRef = useRef(opts?.onFreeLimit);
   useEffect(() => {
     onAnswerRef.current = opts?.onAnswer;
   }, [opts?.onAnswer]);
+  useEffect(() => {
+    onFreeLimitRef.current = opts?.onFreeLimit;
+  }, [opts?.onFreeLimit]);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [listLoading, setListLoading] = useState(true);
@@ -307,9 +311,13 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
             acc += t;
             dirty = true;
           },
+          onFreeLimit: (cooldownUntil) => onFreeLimitRef.current?.(cooldownUntil),
         });
       } catch (e) {
-        if (!ctrl.signal.aborted) error = friendly(e);
+        if (!ctrl.signal.aborted) {
+          if (e instanceof FreeChatLimitError) onFreeLimitRef.current?.(e.cooldownUntil);
+          error = friendly(e);
+        }
       } finally {
         clearInterval(timer);
       }

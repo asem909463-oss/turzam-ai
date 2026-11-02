@@ -23,6 +23,7 @@ if (process.argv.includes('--secrets')) {
     [/AIza[0-9A-Za-z_-]{35}/, 'a Google API key'],
     [/\bsk-ant-[A-Za-z0-9_-]{20,}/, 'an Anthropic key'],
     [/\bsk-(proj-)?[A-Za-z0-9_-]{32,}/, 'an OpenAI key'],
+    [/\bsk_[A-Za-z0-9_-]{20,}/, 'a RevenueCat secret API key'],
     [/eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, 'a JWT (a Supabase key?)'],
   ];
   const files = execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split('\n').filter(Boolean);
@@ -63,8 +64,8 @@ else {
   const e = parse('.env');
   say(/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(e.EXPO_PUBLIC_SUPABASE_URL ?? ''), '.env: EXPO_PUBLIC_SUPABASE_URL is your Project URL (https://xxxx.supabase.co)');
   say(!placeholder(e.EXPO_PUBLIC_SUPABASE_ANON_KEY), '.env: EXPO_PUBLIC_SUPABASE_ANON_KEY is filled in');
-  const leaked = Object.keys(e).filter((k) => /GEMINI|OPENAI|ANTHROPIC|SERVICE_ROLE/i.test(k));
-  say(!leaked.length, `.env contains no AI or service-role keys${leaked.length ? ` (remove: ${leaked.join(', ')})` : ''}`);
+  const leaked = Object.keys(e).filter((k) => /GEMINI|OPENAI|ANTHROPIC|SERVICE_ROLE|REVENUECAT_SECRET/i.test(k));
+  say(!leaked.length, `.env contains no AI, RevenueCat secret, or service-role keys${leaked.length ? ` (remove: ${leaked.join(', ')})` : ''}`);
   // the anon key is a JWT; its role must be "anon", never "service_role"
   try {
     const role = JSON.parse(Buffer.from((e.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '').split('.')[1] ?? '', 'base64url').toString()).role;

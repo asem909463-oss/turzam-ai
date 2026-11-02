@@ -38,6 +38,7 @@ import {
   type InMessage,
   type QuotaKind,
 } from "../_shared/limits.ts";
+import { chatDailyLimit, freeChatLimit, FREE_CHAT_COOLDOWN_SECONDS, revenueCatConfig, verifyRevenueCatPlan, type SubscriptionPlan } from "../_shared/subscriptions.ts";
 
 type Provider = "gemini" | "openai" | "anthropic";
 
@@ -617,7 +618,7 @@ function parseStringArray(raw: string): string[] {
 // ---------- action handlers ----------
 
 // deno-lint-ignore no-explicit-any
-async function handleChat(supabase: any, quotaClient: any, userId: string, input: Extract<ReturnType<typeof validateChat>, { ok: true }>, req: Request) {
+async function handleChat(supabase: any, quotaClient: any, userId: string, input: Extract<ReturnType<typeof validateChat>, { ok: true }>, req: Request, quotaNotice?: { freeLimitReached: boolean; cooldownUntil: string | null }) {
   const v = input.value;
   const ok = available();
   if (!ok.length) return json({ error: "No AI provider is connected on the server yet. See the README, step 5." }, 500);
@@ -740,6 +741,7 @@ async function handleChat(supabase: any, quotaClient: any, userId: string, input
           }
         }
       };
+      if (quotaNotice?.freeLimitReached) send({ quota: quotaNotice });
       try {
         let finished = false;
         for (let i = 0; i < candidates.length && !finished && !client.signal.aborted; i++) {
@@ -927,14 +929,14 @@ Rules:
 // ---------- per-user usage limits ----------
 
 // deno-lint-ignore no-explicit-any
-async function consume(quotaClient: any, userId: string, kind: QuotaKind): Promise<{ ok: boolean; retryAfter: number; day: boolean; global: boolean; broken: boolean }> {
+async function consume(quotaClient: any, userId: string, kind: QuotaKind, plan: SubscriptionPlan = "free"): Promise<{ ok: boolean; retryAfter: number; day: boolean; global: boolean; broken: boolean }> {
   if (!quotaClient) return { ok: false, retryAfter: 30, day: false, global: false, broken: true };
   const q = quotaFor(kind, env);
   const { data, error } = await quotaClient.rpc("consume_quota", {
     p_user_id: userId,
     p_kind: kind,
     p_per_minute: q.perMinute,
-    p_per_day: q.perDay,
+    p_per_day: kind === "chat" ? chatDailyLimit(plan, env, q.perDay) : q.perDay,
     p_global_per_day: globalPerDay(kind, env),
   });
   if (error || !data) {
@@ -957,6 +959,19 @@ function limitResponse(r: { retryAfter: number; day: boolean; global: boolean; b
   return new Response(JSON.stringify({ error: msg }), {
     status: 429,
     headers: { ...cors, "Content-Type": "application/json", "Retry-After": String(Math.max(1, r.retryAfter)) },
+  });
+}
+
+function freeLimitResponse(data: Record<string, unknown>) {
+  const retryAfter = Math.max(1, Number(data.retry_after ?? FREE_CHAT_COOLDOWN_SECONDS));
+  return new Response(JSON.stringify({
+    code: "free_chat_limit",
+    error: "Free access becomes available again in 6 hours.",
+    cooldownUntil: typeof data.cooldown_until === "string" ? data.cooldown_until : null,
+    retryAfter,
+  }), {
+    status: 429,
+    headers: { ...cors, "Content-Type": "application/json", "Retry-After": String(retryAfter) },
   });
 }
 
@@ -1018,9 +1033,36 @@ Deno.serve(async (req) => {
         if (!input.ok) return json({ error: input.error }, 400);
         const searchError = searchConfigurationError(input.value.search, input.value.provider, PROVIDERS.gemini.key().length > 0);
         if (searchError) return json({ error: searchError }, 400);
-        const q = await consume(quotaClient, auth.user.id, "chat");
+        let plan: SubscriptionPlan = "free";
+        if (env("REVENUECAT_SECRET_API_KEY")) {
+          try {
+            const verified = await verifyRevenueCatPlan(auth.user.id, env("REVENUECAT_SECRET_API_KEY"), revenueCatConfig(env));
+            plan = verified.plan;
+          } catch (error) {
+            // A verification outage never grants paid access; the existing Free limits still apply.
+            console.error("RevenueCat chat verification failed", String(error));
+          }
+        }
+        const q = await consume(quotaClient, auth.user.id, "chat", plan);
         if (!q.ok) return limitResponse(q);
-        return await handleChat(supabase, quotaClient, auth.user.id, input, req);
+        let quotaNotice: { freeLimitReached: boolean; cooldownUntil: string | null } | undefined;
+        if (plan === "free") {
+          if (!quotaClient) return json({ error: "Usage limits are not configured on the server." }, 500);
+          const { data: freeQuota, error: freeQuotaError } = await quotaClient.rpc("consume_free_chat", {
+            p_user_id: auth.user.id,
+            p_free_limit: freeChatLimit(env),
+          });
+          if (freeQuotaError || !freeQuota) {
+            console.error("consume_free_chat failed", freeQuotaError?.message);
+            return json({ error: "Usage limits are not set up on the server yet. Run the latest supabase/schema.sql." }, 500);
+          }
+          if (freeQuota.ok !== true) return freeLimitResponse(freeQuota as Record<string, unknown>);
+          quotaNotice = {
+            freeLimitReached: freeQuota.exhausted === true,
+            cooldownUntil: typeof freeQuota.cooldown_until === "string" ? freeQuota.cooldown_until : null,
+          };
+        }
+        return await handleChat(supabase, quotaClient, auth.user.id, input, req, quotaNotice);
       }
       case "title": {
         const q = await consume(quotaClient, auth.user.id, "aux");

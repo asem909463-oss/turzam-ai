@@ -12,8 +12,10 @@ import { MOTTO } from '../src/components/Motto';
 import { PressableScale } from '../src/components/PressableScale';
 import { ScreenHeader } from '../src/components/ScreenHeader';
 import { DeleteAccountModal } from '../src/components/DeleteAccountModal';
+import { PremiumPaywall } from '../src/components/PremiumPaywall';
 import { Toggle } from '../src/components/Toggle';
 import { useAuth } from '../src/context/AuthContext';
+import { useSubscription } from '../src/context/SubscriptionContext';
 import { usePrefs, useStyles, useTheme } from '../src/context/ThemeContext';
 import { useToast } from '../src/context/ToastContext';
 import { useProviders } from '../src/hooks/useProviders';
@@ -81,6 +83,7 @@ export default function Settings() {
   const toast = useToast();
   const { prefs, setScheme, setAccent, setFollowUps } = usePrefs();
   const { user, profile, updateProfile, signOut } = useAuth();
+  const premium = useSubscription();
   const { providers, error: providersError, refresh } = useProviders();
   const [name, setName] = useState(profile?.display_name ?? '');
   // People who signed up with Google or Apple have no Turzam password.
@@ -90,6 +93,7 @@ export default function Settings() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [instructions, setInstructions] = useState(profile?.custom_instructions ?? '');
+  const [premiumOpen, setPremiumOpen] = useState(false);
 
   async function save(patch: Parameters<typeof updateProfile>[0], okText?: string) {
     const err = await updateProfile(patch);
@@ -181,6 +185,29 @@ export default function Settings() {
             style={styles.input}
           />
           <Text style={styles.hint}>{user?.email}</Text>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(30).duration(300)} style={styles.card}>
+          <Text style={styles.label}>Your Turzam plan</Text>
+          <View style={styles.switchRow}>
+            <Ionicons name={premium.status.plan === 'free' ? 'sparkles-outline' : 'diamond'} size={21} color={colors.accentInk} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>
+                {premium.status.plan === 'free' ? 'Turzam Free' : `Turzam ${premium.status.plan === 'plus' ? 'Plus' : 'Pro'}`}
+              </Text>
+              <Text style={styles.hint}>
+                {premium.status.plan === 'free'
+                  ? `${premium.status.freeChatsRemaining ?? premium.status.freeChatLimit} Free chats available before the six-hour cooldown.`
+                  : 'Verified subscription · Apple manages renewals and cancellation.'}
+              </Text>
+            </View>
+          </View>
+          <PressableScale onPress={() => setPremiumOpen(true)} style={styles.linkRow} label="Explore plans and restore purchases">
+            <Ionicons name="sparkles" size={19} color={colors.accentInk} />
+            <Text style={styles.linkText}>Explore Plans & Restore Purchases</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+          </PressableScale>
+          {premium.error ? <Text style={styles.hint}>Subscription status could not be refreshed. Chat limits remain enforced by Turzam’s server.</Text> : null}
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(60).duration(300)} style={styles.card}>
@@ -445,6 +472,7 @@ export default function Settings() {
         onCancel={() => setDeleteOpen(false)}
         onConfirm={deleteAccount}
       />
+      <PremiumPaywall visible={premiumOpen} mode="manage" onDismiss={() => setPremiumOpen(false)} />
     </View>
   );
 }

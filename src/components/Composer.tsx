@@ -33,9 +33,12 @@ type Props = {
   /** Web search is on for the next answer. */
   searchOn?: boolean;
   onToggleSearch?: () => void;
+  locked?: boolean;
+  lockMessage?: string;
+  onUpgrade?: () => void;
 };
 
-export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, onVoice, searchOn, onToggleSearch }: Props) {
+export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, onVoice, searchOn, onToggleSearch, locked = false, lockMessage, onUpgrade }: Props) {
   const { colors } = useTheme();
   const styles = useStyles(make);
   const toast = useToast();
@@ -60,7 +63,7 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, o
     { label: 'Review design', icon: 'color-palette-outline', prompt: 'Review this design or screenshot like a senior designer: what works, what does not, and the 5 most important fixes.' },
     { label: 'Compare', icon: 'git-compare-outline', prompt: 'Compare these images: key differences and similarities, and which is better for my goal.' },
   ];
-  const canSend = !busy && (text.trim().length > 0 || files.length > 0);
+  const canSend = !busy && !locked && (text.trim().length > 0 || files.length > 0);
   const ready = useSharedValue(0);
   useEffect(() => {
     ready.value = withSpring(canSend || busy ? 1 : 0, { damping: 14, stiffness: 240 });
@@ -100,6 +103,17 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, o
 
   return (
     <View style={styles.wrap}>
+      {locked ? (
+        <Animated.View entering={FadeIn.duration(180)} style={styles.lockedRow}>
+          <Ionicons name="time-outline" size={16} color={accent} />
+          <Text style={styles.lockedText}>{lockMessage ?? 'Free messages are temporarily paused.'}</Text>
+          {onUpgrade ? (
+            <PressableScale label="Explore premium plans" onPress={onUpgrade} style={styles.upgradeLink}>
+              <Text style={[styles.lockedText, { color: accent, fontFamily: fonts.uiBold }]}>Upgrade</Text>
+            </PressableScale>
+          ) : null}
+        </Animated.View>
+      ) : null}
       {files.length ? (
         <Animated.View entering={ZoomIn.duration(200)} exiting={ZoomOut.duration(150)}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.previewRow}>
@@ -137,7 +151,7 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, o
           label={`Attach files (${files.length}/${MAX_FILES})`}
           style={styles.attach}
           onPress={() => setMenu(true)}
-          disabled={busy}
+          disabled={busy || locked}
         >
           <Ionicons name="add" size={26} color={colors.textDim} />
         </PressableScale>
@@ -146,10 +160,11 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, o
           ref={inputRef}
           value={text}
           onChangeText={setText}
-          placeholder={placeholder}
+          placeholder={locked ? 'Free chat is temporarily paused' : placeholder}
           placeholderTextColor={colors.textFaint}
           selectionColor={accent}
           multiline
+          editable={!locked}
           maxLength={8000}
           onFocus={() => (focus.value = withSpring(1))}
           onBlur={() => (focus.value = withSpring(0))}
@@ -160,13 +175,14 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, o
           <PressableScale
             label={searchOn ? 'Turn web search off' : 'Turn web search on'}
             onPress={onToggleSearch}
+            disabled={busy || locked}
             style={[styles.attach, searchOn && { backgroundColor: withAlpha(accent, 0.2), borderRadius: 20 }]}
           >
             <Ionicons name="globe-outline" size={21} color={searchOn ? accent : colors.textDim} />
           </PressableScale>
         ) : null}
 
-        {onVoice && !busy && !canSend ? (
+        {onVoice && !locked && !busy && !canSend ? (
           <PressableScale label="Voice conversation" onPress={onVoice} style={[styles.send, { backgroundColor: withAlpha(accent, 0.18) }]}>
             <Ionicons name="mic" size={20} color={accent} />
           </PressableScale>
@@ -195,7 +211,7 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, o
       </Animated.View>
 
       <ActionSheet
-        visible={menu}
+        visible={menu && !locked}
         title="Attach to your message"
         onClose={() => setMenu(false)}
         actions={[
@@ -211,6 +227,9 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, o
 const make = (t: Theme) =>
   StyleSheet.create({
     wrap: { paddingHorizontal: 12, paddingTop: 6, gap: 10, width: '100%', maxWidth: 760, alignSelf: 'center' },
+    lockedRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14, borderWidth: 1, borderColor: withAlpha(t.colors.accent, 0.35), backgroundColor: withAlpha(t.colors.accent, 0.08) },
+    lockedText: { flex: 1, color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 12.5 },
+    upgradeLink: { paddingHorizontal: 4, paddingVertical: 2 },
     previewRow: { gap: 10, paddingLeft: 6, paddingRight: 6, paddingTop: 8, alignItems: 'center' },
     lensRow: { gap: 8, paddingHorizontal: 6 },
     lens: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: 17, borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.surface },

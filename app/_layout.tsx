@@ -8,6 +8,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { InstrumentSerif_400Regular, InstrumentSerif_400Regular_Italic } from '@expo-google-fonts/instrument-serif';
 import { SpaceGrotesk_400Regular, SpaceGrotesk_500Medium, SpaceGrotesk_700Bold } from '@expo-google-fonts/space-grotesk';
 import { AuthProvider, useAuth } from '../src/context/AuthContext';
+import { SubscriptionProvider } from '../src/context/SubscriptionContext';
 import { ThemeProvider, useTheme } from '../src/context/ThemeContext';
 import { ToastProvider } from '../src/context/ToastContext';
 import { isConfigured } from '../src/lib/config';
@@ -73,7 +74,9 @@ export default function RootLayout() {
         <ThemeProvider>
           <ToastProvider>
             <AuthProvider>
-              <Gate />
+              <SubscriptionProvider>
+                <Gate />
+              </SubscriptionProvider>
             </AuthProvider>
           </ToastProvider>
         </ThemeProvider>

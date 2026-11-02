@@ -60,6 +60,7 @@ alter table public.profiles add column if not exists custom_instructions text no
 alter table public.profiles add column if not exists default_persona text not null default 'none';
 alter table public.profiles add column if not exists voice_reply boolean not null default true;
 alter table public.profiles add column if not exists voice_lang text not null default '';
+alter table public.profiles add column if not exists premium_welcome_seen_at timestamptz;
 alter table public.conversations add column if not exists persona text not null default 'none';
 alter table public.conversations add column if not exists pinned boolean not null default false;
 alter table public.conversations add column if not exists archived boolean not null default false;
@@ -231,6 +232,16 @@ create index if not exists usage_events_global on public.usage_events (kind, cre
 alter table public.usage_events enable row level security;
 revoke all on public.usage_events from public, anon, authenticated, service_role;
 
+-- Server-only Free-tier cooldown state. The window resets only after the full cooldown expires.
+create table if not exists public.free_chat_state (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  used integer not null default 0 check (used >= 0),
+  cooldown_until timestamptz,
+  updated_at timestamptz not null default now()
+);
+alter table public.free_chat_state enable row level security;
+revoke all on public.free_chat_state from public, anon, authenticated, service_role;
+
 -- Returns {"ok": true} and records the call, or {"ok": false, "reason": "minute"|"day", "retry_after": seconds}.
 -- The Edge Function supplies limits from server secrets. Execution is service_role-only; the public API roles
 -- cannot choose another user's ID, change their own counters, or burn the global cap.
@@ -302,3 +313,136 @@ $$;
 
 revoke all on function public.consume_quota(uuid, text, int, int, int) from public, anon, authenticated;
 grant execute on function public.consume_quota(uuid, text, int, int, int) to service_role;
+
+
+-- Free plan: allow the configured number of chats, then start one fixed six-hour cooldown.
+-- The final permitted chat sets cooldown_until, so the app can show the limit paywall immediately.
+create or replace function public.consume_free_chat(p_user_id uuid, p_free_limit int)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  free_limit int := least(greatest(coalesce(p_free_limit, 10), 1), 500);
+  current_row public.free_chat_state%rowtype;
+  now_at timestamptz := clock_timestamp();
+  next_used int;
+begin
+  if p_user_id is null then
+    return jsonb_build_object('ok', false, 'reason', 'auth', 'retry_after', 60);
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_user_id::text || ':free-chat', 0));
+  select * into current_row from public.free_chat_state where user_id = p_user_id for update;
+  if not found then
+    insert into public.free_chat_state (user_id, used) values (p_user_id, 0);
+    select * into current_row from public.free_chat_state where user_id = p_user_id for update;
+  end if;
+
+  if current_row.cooldown_until is not null and current_row.cooldown_until > now_at then
+    return jsonb_build_object(
+      'ok', false,
+      'reason', 'free_limit',
+      'used', current_row.used,
+      'remaining', 0,
+      'cooldown_until', current_row.cooldown_until,
+      'retry_after', greatest(1, ceil(extract(epoch from (current_row.cooldown_until - now_at)))::int)
+    );
+  end if;
+
+  if current_row.cooldown_until is not null and current_row.cooldown_until <= now_at then
+    current_row.used := 0;
+    current_row.cooldown_until := null;
+  end if;
+
+  if current_row.used >= free_limit then
+    current_row.cooldown_until := now_at + interval '6 hours';
+    update public.free_chat_state
+      set used = current_row.used, cooldown_until = current_row.cooldown_until, updated_at = now_at
+      where user_id = p_user_id;
+    return jsonb_build_object(
+      'ok', false,
+      'reason', 'free_limit',
+      'used', current_row.used,
+      'remaining', 0,
+      'cooldown_until', current_row.cooldown_until,
+      'retry_after', 21600
+    );
+  end if;
+
+  next_used := current_row.used + 1;
+  if next_used >= free_limit then
+    current_row.cooldown_until := now_at + interval '6 hours';
+  else
+    current_row.cooldown_until := null;
+  end if;
+  update public.free_chat_state
+    set used = next_used, cooldown_until = current_row.cooldown_until, updated_at = now_at
+    where user_id = p_user_id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'used', next_used,
+    'remaining', greatest(0, free_limit - next_used),
+    'exhausted', next_used >= free_limit,
+    'cooldown_until', current_row.cooldown_until
+  );
+end;
+$$;
+
+-- Read-only status for the app, but still serialized with consume_free_chat to avoid stale races.
+create or replace function public.get_free_chat_status(p_user_id uuid, p_free_limit int)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  free_limit int := least(greatest(coalesce(p_free_limit, 10), 1), 500);
+  current_row public.free_chat_state%rowtype;
+  now_at timestamptz := clock_timestamp();
+begin
+  if p_user_id is null then
+    return jsonb_build_object('ok', false, 'reason', 'auth');
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_user_id::text || ':free-chat', 0));
+  select * into current_row from public.free_chat_state where user_id = p_user_id for update;
+  if not found then
+    return jsonb_build_object('ok', true, 'used', 0, 'remaining', free_limit, 'cooldown_until', null);
+  end if;
+
+  if current_row.cooldown_until is not null and current_row.cooldown_until <= now_at then
+    current_row.used := 0;
+    current_row.cooldown_until := null;
+  elsif current_row.cooldown_until is null and current_row.used >= free_limit then
+    current_row.cooldown_until := now_at + interval '6 hours';
+  end if;
+
+  update public.free_chat_state
+    set used = current_row.used, cooldown_until = current_row.cooldown_until, updated_at = now_at
+    where user_id = p_user_id;
+
+  if current_row.cooldown_until is not null then
+    return jsonb_build_object(
+      'ok', true,
+      'used', current_row.used,
+      'remaining', 0,
+      'cooldown_until', current_row.cooldown_until
+    );
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'used', current_row.used,
+    'remaining', greatest(0, free_limit - current_row.used),
+    'cooldown_until', null
+  );
+end;
+$$;
+
+revoke all on function public.consume_free_chat(uuid, int) from public, anon, authenticated;
+grant execute on function public.consume_free_chat(uuid, int) to service_role;
+revoke all on function public.get_free_chat_status(uuid, int) from public, anon, authenticated;
+grant execute on function public.get_free_chat_status(uuid, int) to service_role;

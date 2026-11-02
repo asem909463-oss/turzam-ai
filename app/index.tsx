@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FlatList, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
@@ -18,10 +19,12 @@ import { MessageBubble } from '../src/components/MessageBubble';
 import { ModeSheet } from '../src/components/ModeSheet';
 import { Motto } from '../src/components/Motto';
 import { PressableScale } from '../src/components/PressableScale';
+import { PremiumPaywall } from '../src/components/PremiumPaywall';
 import { ReviewPrompt } from '../src/components/ReviewPrompt';
 import { Skeleton } from '../src/components/Skeleton';
 import { WordReveal } from '../src/components/WordReveal';
 import { useAuth } from '../src/context/AuthContext';
+import { useSubscription } from '../src/context/SubscriptionContext';
 import { useStyles, useTheme } from '../src/context/ThemeContext';
 import { useToast } from '../src/context/ToastContext';
 import { useChat } from '../src/hooks/useChat';
@@ -62,15 +65,29 @@ export default function ChatScreen() {
   const { colors } = useTheme();
   const styles = useStyles(make);
   const toast = useToast();
-  const { user, profile } = useAuth();
+  const { user, profile, updateProfile } = useAuth();
+  const premium = useSubscription();
+  const [paywallMode, setPaywallMode] = useState<'welcome' | 'limit' | 'manage' | null>(null);
+  const [localCooldownUntil, setLocalCooldownUntil] = useState<string | null>(null);
+  const [clockNow, setClockNow] = useState(Date.now());
+  const welcomeHandledRef = useRef<string | null>(null);
+  const cooldownRefreshRef = useRef<string | null>(null);
+  const showFreeLimit = useCallback((cooldownUntil: string | null) => {
+    if (cooldownUntil) setLocalCooldownUntil(cooldownUntil);
+    setPaywallMode('limit');
+    void premium.refresh();
+  }, [premium.refresh]);
   const routeParams = useLocalSearchParams<{ projectId?: string; conversationId?: string }>();
   const [answer, setAnswer] = useState<{ text: string; nonce: number } | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const handledRouteRef = useRef('');
-  const chat = useChat({ onAnswer: (text) => {
-    setAnswer({ text, nonce: Date.now() });
-    recordSuccessfulAnswer().then((eligible) => { if (eligible) setReviewOpen(true); }).catch(() => {});
-  } });
+  const chat = useChat({
+    onAnswer: (text) => {
+      setAnswer({ text, nonce: Date.now() });
+      recordSuccessfulAnswer().then((eligible) => { if (eligible) setReviewOpen(true); }).catch(() => {});
+    },
+    onFreeLimit: showFreeLimit,
+  });
   const { providers, caps } = useProviders();
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [viewImage, setViewImage] = useState<string | null>(null);
@@ -85,8 +102,57 @@ export default function ChatScreen() {
   useFocusEffect(
     useCallback(() => {
       syncList();
-    }, [syncList]),
+      void premium.refresh();
+    }, [syncList, premium.refresh]),
   );
+
+  useEffect(() => {
+    if (!user || !profile || premium.loading || premium.error) return;
+    const accountId = user.id;
+    if (welcomeHandledRef.current === accountId) return;
+    welcomeHandledRef.current = accountId;
+    let cancelled = false;
+    (async () => {
+      const storageKey = `turzam-premium-welcome-seen:${accountId}`;
+      let locallySeen = false;
+      try {
+        locallySeen = (await AsyncStorage.getItem(storageKey)) === '1';
+      } catch {
+        // The profile column remains the cross-install source of truth.
+      }
+      if (cancelled) return;
+      const alreadySeen = !!profile.premium_welcome_seen_at || locallySeen;
+      if (!alreadySeen) {
+        try { await AsyncStorage.setItem(storageKey, '1'); } catch { /* the profile flag still persists across devices */ }
+        if (premium.status.plan === 'free') setPaywallMode('welcome');
+      }
+      if (!profile.premium_welcome_seen_at) {
+        await updateProfile({ premium_welcome_seen_at: new Date().toISOString() });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.id, profile?.id, profile?.premium_welcome_seen_at, premium.loading, premium.error, premium.status.plan, updateProfile]);
+
+  const cooldownUntil = premium.status.cooldownUntil ?? localCooldownUntil;
+  useEffect(() => {
+    if (!cooldownUntil || premium.status.plan !== 'free') return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setClockNow(now);
+      if (Date.parse(cooldownUntil) <= now && cooldownRefreshRef.current !== cooldownUntil) {
+        cooldownRefreshRef.current = cooldownUntil;
+        setLocalCooldownUntil(null);
+        void premium.refresh();
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldownUntil, premium.status.plan, premium.refresh]);
+
+  const freeLocked = premium.status.plan === 'free' && !!cooldownUntil && Date.parse(cooldownUntil) > clockNow;
+  const cooldownRemaining = freeLocked && cooldownUntil ? Math.max(0, Math.ceil((Date.parse(cooldownUntil) - clockNow) / 1000)) : 0;
+  const lockMessage = cooldownRemaining > 0
+    ? `Free access returns in ${Math.floor(cooldownRemaining / 3600)}h ${String(Math.floor((cooldownRemaining % 3600) / 60)).padStart(2, '0')}m.`
+    : 'Free messages are temporarily paused.';
 
   useEffect(() => {
     const projectId = typeof routeParams.projectId === 'string' ? routeParams.projectId : '';
@@ -267,7 +333,7 @@ export default function ChatScreen() {
               contentContainerStyle={{ paddingVertical: 12 }}
               showsVerticalScrollIndicator={false}
               ListHeaderComponent={
-                !chat.busy && chat.suggestions.length ? (
+                !freeLocked && !chat.busy && chat.suggestions.length ? (
                   <FollowUps items={chat.suggestions} accent={mode.color} onPick={(t) => chat.send(t, [])} />
                 ) : undefined
               }
@@ -283,6 +349,9 @@ export default function ChatScreen() {
             placeholder={`Message Turzam · ${chat.projectId ? 'Project' : mode.name}`}
             onSend={chat.send}
             onStop={chat.stop}
+            locked={freeLocked}
+            lockMessage={lockMessage}
+            onUpgrade={() => setPaywallMode('limit')}
             prefill={prefill}
             onVoice={caps?.voiceInput === false ? () => toast.show('Voice input needs the Gemini key on the server.', 'info') : () => setVoiceOpen(true)}
             searchOn={chat.searchOn && caps?.search === true}
@@ -381,12 +450,22 @@ export default function ChatScreen() {
         lang={profile?.voice_lang || undefined}
         speakReplies={profile?.voice_reply !== false}
         accent={mode.color}
-        onUtterance={(t) => chat.send(t, [])}
+        onUtterance={(t) => {
+          if (freeLocked) showFreeLimit(cooldownUntil);
+          else chat.send(t, []);
+        }}
         onStopGenerating={chat.stop}
         onClose={() => setVoiceOpen(false)}
       />
 
       <ImageViewer uri={viewImage} onClose={() => setViewImage(null)} />
+
+      <PremiumPaywall
+        visible={paywallMode !== null}
+        mode={paywallMode ?? 'manage'}
+        cooldownUntil={cooldownUntil}
+        onDismiss={() => setPaywallMode(null)}
+      />
 
       <ReviewPrompt
         visible={reviewOpen}

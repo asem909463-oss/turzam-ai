@@ -94,6 +94,30 @@ done
 after=$(run -c "select count(*) from public.usage_events")
 expect "denied direct calls cannot write usage records" "$before" "$after"
 
+echo "-- Free chat counter starts one six-hour cooldown on the final allowed message"
+FREE_UID="00000000-0000-0000-0000-0000000000fc"
+run -c "insert into auth.users values ('$FREE_UID') on conflict do nothing" >/dev/null
+free_privileges=$(run -c "select concat(has_function_privilege('service_role','public.consume_free_chat(uuid,integer)','EXECUTE'),'|',has_function_privilege('authenticated','public.consume_free_chat(uuid,integer)','EXECUTE'),'|',has_function_privilege('anon','public.consume_free_chat(uuid,integer)','EXECUTE'))")
+expect "only the trusted role can consume Free chat" "t|f|f" "$free_privileges"
+first=$(run -c "set role service_role; select public.consume_free_chat('$FREE_UID',2)")
+second=$(run -c "set role service_role; select public.consume_free_chat('$FREE_UID',2)")
+expect "first Free chat is allowed" "1" "$(printf '%s' "$first" | grep -o '"ok": true' | wc -l | tr -d ' ')"
+expect "last configured Free chat is allowed" "1" "$(printf '%s' "$second" | grep -o '"exhausted": true' | wc -l | tr -d ' ')"
+third=$(run -c "set role service_role; select public.consume_free_chat('$FREE_UID',2)")
+expect "chat after the Free limit is blocked" "1" "$(printf '%s' "$third" | grep -o '"reason": "free_limit"' | wc -l | tr -d ' ')"
+cooldown=$(run -c "select (cooldown_until > now() + interval '5 hours 59 minutes' and cooldown_until <= now() + interval '6 hours 1 minute')::text from public.free_chat_state where user_id='$FREE_UID'")
+expect "cooldown is set to six hours" "true" "$cooldown"
+before_expiry=$(run -c "select cooldown_until::text from public.free_chat_state where user_id='$FREE_UID'")
+blocked_again=$(run -c "set role service_role; select public.consume_free_chat('$FREE_UID',2)")
+after_expiry_check=$(run -c "select cooldown_until::text from public.free_chat_state where user_id='$FREE_UID'")
+expect "repeated blocked sends do not extend the cooldown" "$before_expiry" "$after_expiry_check"
+expect "repeated blocked sends remain blocked" "1" "$(printf '%s' "$blocked_again" | grep -o '"reason": "free_limit"' | wc -l | tr -d ' ')"
+run -c "update public.free_chat_state set cooldown_until=now()-interval '1 second' where user_id='$FREE_UID'" >/dev/null
+after_wait=$(run -c "set role service_role; select public.get_free_chat_status('$FREE_UID',2)")
+expect "status resets the counter after expiry" "1" "$(printf '%s' "$after_wait" | grep -o '"remaining": 2' | wc -l | tr -d ' ')"
+after_reset=$(run -c "set role service_role; select public.consume_free_chat('$FREE_UID',2)")
+expect "chat is allowed again after the actual cooldown expires" "1" "$(printf '%s' "$after_reset" | grep -o '"ok": true' | wc -l | tr -d ' ')"
+
 # Concurrent callers: every caller connects first and then waits at a "starting gate" (an advisory lock held
 # by a helper session). When all of them are waiting the gate opens, so they hit consume_quota at the same instant.
 #   burst N distinct|same KIND PER_MIN PER_DAY GLOBAL   -> prints how many calls were allowed
@@ -124,6 +148,31 @@ burst() {
   rm -f "$out"
 }
 
+burst_free() {
+  local n=$1 who=$2 free_limit=$3
+  local shared="00000000-0000-0000-0000-0000000000fd"
+  uid_for() { if [ "$who" = distinct ]; then printf '00000000-0000-0000-0000-%012d' "$1"; else echo "$shared"; fi; }
+  run -c "truncate public.free_chat_state; truncate auth.users cascade" >/dev/null 2>&1
+  for i in $(seq 1 "$n"); do echo "insert into auth.users values ('$(uid_for "$i")') on conflict do nothing;"; done | run >/dev/null
+
+  GATE=777002
+  PGAPPNAME=gate psql -X -q -At -d "$DB" -c "select pg_advisory_lock($GATE); select pg_sleep(300)" >/dev/null 2>&1 &
+  until [ "$(run -c "select count(*) from pg_locks where locktype='advisory' and objid=$GATE and granted")" = 1 ]; do sleep 0.05; done
+
+  local out; out="$(mktemp)"
+  for i in $(seq 1 "$n"); do
+    (
+      run -c "set role service_role; select pg_advisory_lock_shared($GATE); select (public.consume_free_chat('$(uid_for "$i")',$free_limit)->>'ok')" \
+        | tail -1 >> "$out"
+    ) &
+  done
+  until [ "$(run -c "select count(*) from pg_locks where locktype='advisory' and objid=$GATE and not granted")" -ge "$n" ]; do sleep 0.05; done
+  run -c "select pg_terminate_backend(pid) from pg_stat_activity where application_name='gate'" >/dev/null
+  wait
+  grep -c '^true$' "$out" || true
+  rm -f "$out"
+}
+
 echo "-- 60 different users at the same moment, global cap 10 (each user is far below their own limits)"
 expect "global cap holds under a burst" 10 "$(burst 60 distinct chat 120 5000 10)"
 expect "global cap holds on a second burst" 10 "$(burst 60 distinct chat 120 5000 10)"
@@ -131,6 +180,8 @@ echo "-- one user firing 30 requests at once, per-minute limit 5, no global cap"
 expect "per-user minute limit holds" 5 "$(burst 30 same chat 5 5000 null)"
 echo "-- no global cap set: nobody is throttled"
 expect "global cap is off when null" 40 "$(burst 40 distinct chat 120 5000 null)"
+echo "-- one Free user firing 30 messages at once, Free limit 5"
+expect "free-chat counter cannot be raced past its cap" 5 "$(burst_free 30 same 5)"
 echo "-- caps are per action type"
 run -c "truncate public.usage_events" >/dev/null
 run >/dev/null -c "insert into auth.users values ('00000000-0000-0000-0000-0000000000aa') on conflict do nothing"

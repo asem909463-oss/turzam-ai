@@ -20,6 +20,13 @@ const CALL_TIMEOUT_MS = 25_000;
 
 class TimeoutError extends Error {}
 
+export class FreeChatLimitError extends Error {
+  constructor(public readonly cooldownUntil: string | null, message = 'Free access becomes available again in 6 hours.') {
+    super(message);
+    this.name = 'FreeChatLimitError';
+  }
+}
+
 /** An AbortController that also aborts when `outer` does, and after `ms`. */
 function linked(outer: AbortSignal | undefined, ms: number) {
   const ctrl = new AbortController();
@@ -59,16 +66,22 @@ function headers(token: string) {
   };
 }
 
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<Error> {
   try {
     const j = await res.json();
-    if (j?.error) return String(j.error);
+    if (j?.code === 'free_chat_limit') {
+      return new FreeChatLimitError(
+        typeof j.cooldownUntil === 'string' ? j.cooldownUntil : null,
+        String(j.error ?? 'Free access becomes available again in 6 hours.'),
+      );
+    }
+    if (j?.error) return new Error(String(j.error));
   } catch {
-    // ignore
+    // Ignore an absent/non-JSON body and use the status-specific fallback.
   }
-  if (res.status === 404) return 'The chat backend is not deployed yet. Run the "functions deploy chat" step in the README.';
-  if (res.status === 401) return 'Please sign in again.';
-  return `Request failed (${res.status})`;
+  if (res.status === 404) return new Error('The chat backend is not deployed yet. Run the "functions deploy chat" step in the README.');
+  if (res.status === 401) return new Error('Please sign in again.');
+  return new Error(`Request failed (${res.status})`);
 }
 
 /** Streams the assistant's answer. Calls onText with each new piece of text. */
@@ -84,6 +97,7 @@ export async function streamChat(opts: {
   onText: (text: string) => void;
   onMeta?: (meta: { provider?: ProviderId; search?: boolean }) => void;
   onSources?: (sources: Source[]) => void;
+  onFreeLimit?: (cooldownUntil: string | null) => void;
 }): Promise<void> {
   const t = linked(opts.signal, STREAM_TOTAL_MS);
   const tooSlow = () => new TimeoutError('The AI took too long to answer. Please try again.');
@@ -104,7 +118,7 @@ export async function streamChat(opts: {
       }),
     });
 
-    if (!res.ok) throw new Error(await readError(res as unknown as Response));
+    if (!res.ok) throw await readError(res as unknown as Response);
     if (!res.body) throw new Error('The server did not send a streaming response.');
 
     const reader = res.body.getReader();
@@ -122,7 +136,14 @@ export async function streamChat(opts: {
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
         if (!payload) continue;
-        let evt: { t?: string; error?: string; done?: boolean; meta?: { provider?: ProviderId; search?: boolean }; sources?: Source[] };
+        let evt: {
+          t?: string;
+          error?: string;
+          done?: boolean;
+          meta?: { provider?: ProviderId; search?: boolean };
+          sources?: Source[];
+          quota?: { freeLimitReached?: boolean; cooldownUntil?: string | null };
+        };
         try {
           evt = JSON.parse(payload);
         } catch {
@@ -131,6 +152,7 @@ export async function streamChat(opts: {
         if (evt.error) throw new Error(evt.error);
         if (evt.meta) opts.onMeta?.(evt.meta);
         if (evt.sources) opts.onSources?.(evt.sources);
+        if (evt.quota?.freeLimitReached) opts.onFreeLimit?.(evt.quota.cooldownUntil ?? null);
         if (evt.t) opts.onText(evt.t);
         if (evt.done) return;
       }
@@ -158,7 +180,7 @@ async function post<T>(url: string, token: string, body: Record<string, unknown>
   const t = linked(undefined, timeoutMs);
   try {
     const res = await fetch(url, { method: 'POST', signal: t.signal, headers: headers(token), body: JSON.stringify(body) });
-    if (!res.ok) throw new Error(await readError(res as unknown as Response));
+    if (!res.ok) throw await readError(res as unknown as Response);
     return (await res.json()) as T;
   } catch (e) {
     if (t.timedOut) throw new Error('The server took too long to answer. Please try again.');
