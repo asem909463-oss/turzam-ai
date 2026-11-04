@@ -29,6 +29,7 @@ import { useProviders } from '../src/hooks/useProviders';
 import { getMode, getPersona } from '../src/modes';
 import { exportChat, type ExportFormat } from '../src/lib/export';
 import { cleanForSpeech } from '../src/lib/speech';
+import { loadActiveAnnouncement, type PublicAnnouncement } from '../src/lib/founder-admin';
 import { dismissReviewPrompt, recordSuccessfulAnswer, snoozeReviewPrompt } from '../src/lib/reviews';
 import { greeting } from '../src/lib/utils';
 import { fonts, radius, Theme, withAlpha } from '../src/theme';
@@ -67,11 +68,14 @@ export default function ChatScreen() {
   const [answer, setAnswer] = useState<{ text: string; nonce: number } | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const handledRouteRef = useRef('');
-  const chat = useChat({ onAnswer: (text) => {
-    setAnswer({ text, nonce: Date.now() });
-    recordSuccessfulAnswer().then((eligible) => { if (eligible) setReviewOpen(true); }).catch(() => {});
-  } });
-  const { providers, caps } = useProviders();
+  const chat = useChat({
+    onAnswer: (text) => {
+      setAnswer({ text, nonce: Date.now() });
+      recordSuccessfulAnswer().then((eligible) => { if (eligible) setReviewOpen(true); }).catch(() => {});
+    },
+    onFounderAccess: () => router.push('/founder-admin'),
+  });
+  const { providers, caps, refresh: refreshProviders } = useProviders();
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [viewImage, setViewImage] = useState<string | null>(null);
 
@@ -80,12 +84,30 @@ export default function ChatScreen() {
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
   const [seed, setSeed] = useState(1);
   const [exportOpen, setExportOpen] = useState(false);
+  const [announcement, setAnnouncement] = useState<PublicAnnouncement | null>(null);
+  const [dismissedAnnouncementId, setDismissedAnnouncementId] = useState<string | null>(null);
 
   const { syncList } = chat;
   useFocusEffect(
     useCallback(() => {
       syncList();
     }, [syncList]),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshProviders();
+    }, [refreshProviders]),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      loadActiveAnnouncement()
+        .then((notice) => { if (active) setAnnouncement(notice); })
+        .catch(() => {});
+      return () => { active = false; };
+    }, []),
   );
 
   useEffect(() => {
@@ -176,7 +198,14 @@ export default function ChatScreen() {
           </View>
         </View>
 
-        {chat.projectId ? (
+        {caps?.maintenance ? (
+          <View style={styles.maintenanceBanner}>
+            <Ionicons name="construct-outline" size={17} color={colors.danger} />
+            <Text style={styles.maintenanceText}>{caps.maintenance}</Text>
+          </View>
+        ) : null}
+
+        {chat.projectId && caps?.features?.projects !== false ? (
           <PressableScale
             onPress={() => router.push({ pathname: '/project', params: { id: chat.projectId as string } })}
             style={styles.projectBanner}
@@ -186,6 +215,19 @@ export default function ChatScreen() {
             <Text style={styles.projectBannerText}>Project context is on</Text>
             <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
           </PressableScale>
+        ) : null}
+
+        {announcement && dismissedAnnouncementId !== announcement.id ? (
+          <View style={styles.announcement}>
+            <Ionicons name="megaphone-outline" size={18} color={colors.accentInk} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.announcementTitle}>{announcement.title}</Text>
+              <Text style={styles.announcementText}>{announcement.body}</Text>
+            </View>
+            <PressableScale onPress={() => setDismissedAnnouncementId(announcement.id)} label="Dismiss announcement" style={{ padding: 5 }}>
+              <Ionicons name="close" size={18} color={colors.textFaint} />
+            </PressableScale>
+          </View>
         ) : null}
 
         {/* Body */}
@@ -284,9 +326,10 @@ export default function ChatScreen() {
             onSend={chat.send}
             onStop={chat.stop}
             prefill={prefill}
-            onVoice={caps?.voiceInput === false ? () => toast.show('Voice input needs the Gemini key on the server.', 'info') : () => setVoiceOpen(true)}
+            attachmentsEnabled={caps?.features?.attachments !== false}
+            onVoice={caps?.features?.voiceInput === false ? undefined : caps?.voiceInput === false ? () => toast.show('Voice input needs the Gemini key on the server.', 'info') : () => setVoiceOpen(true)}
             searchOn={chat.searchOn && caps?.search === true}
-            onToggleSearch={() => {
+            onToggleSearch={caps?.features?.search === false ? undefined : () => {
               if (caps?.search === false) {
                 toast.show('Web search needs the Gemini key on the server.', 'info');
                 return;
@@ -349,6 +392,7 @@ export default function ChatScreen() {
           toast.show(ok ? 'Folder deleted. Its chats are kept.' : 'Could not delete the folder', ok ? 'success' : 'error');
         }}
         onSearchMessages={chat.searchMessages}
+        features={caps?.features}
         onOpenMemory={() => {
           setDrawerOpen(false);
           router.push('/memory');
@@ -446,6 +490,11 @@ const make = (t: Theme) =>
     modelText: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 13 },
     projectBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'center', width: '100%', maxWidth: 760, paddingHorizontal: 14, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: t.colors.border, backgroundColor: withAlpha(t.colors.surface, 0.72) },
     projectBannerText: { flex: 1, color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 12 },
+    maintenanceBanner: { flexDirection: 'row', alignItems: 'center', gap: 9, alignSelf: 'center', width: '100%', maxWidth: 760, marginBottom: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.md, borderWidth: 1, borderColor: withAlpha(t.colors.danger, 0.36), backgroundColor: withAlpha(t.colors.danger, 0.08) },
+    maintenanceText: { flex: 1, color: t.colors.text, fontFamily: fonts.ui, fontSize: 12, lineHeight: 17 },
+    announcement: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, alignSelf: 'center', width: '100%', maxWidth: 760, marginBottom: 6, padding: 12, borderRadius: radius.md, borderWidth: 1, borderColor: withAlpha(t.colors.accent, 0.32), backgroundColor: withAlpha(t.colors.accent, 0.08) },
+    announcementTitle: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 13, marginBottom: 2 },
+    announcementText: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 12, lineHeight: 17 },
     column: { flex: 1, width: '100%', maxWidth: 760, alignSelf: 'center' },
     skeletons: { padding: 20, gap: 12, paddingTop: 30 },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },

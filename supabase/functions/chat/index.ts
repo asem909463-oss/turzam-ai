@@ -38,6 +38,7 @@ import {
   type InMessage,
   type QuotaKind,
 } from "../_shared/limits.ts";
+import { normalizeRuntimeSettings, quotaForTier, type RuntimeSettings, type Tier } from "../_shared/admin-runtime.ts";
 
 type Provider = "gemini" | "openai" | "anthropic";
 
@@ -153,8 +154,67 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function available(): Provider[] {
-  return ORDER.filter((p) => PROVIDERS[p].key().length > 0);
+function available(settings: RuntimeSettings): Provider[] {
+  return ORDER.filter((p) => settings.models[p] && PROVIDERS[p].key().length > 0);
+}
+
+function missingAdminTable(error: { code?: string; message?: string } | null): boolean {
+  return !!error && (error.code === "42P01" || error.code === "PGRST205" || /schema cache|does not exist/i.test(error.message ?? ""));
+}
+
+// deno-lint-ignore no-explicit-any
+async function loadRuntimeSettings(adminClient: any): Promise<RuntimeSettings> {
+  let value: unknown;
+  if (adminClient) {
+    const { data, error } = await adminClient.from("admin_settings").select("value").eq("key", "runtime").maybeSingle();
+    if (error && !missingAdminTable(error)) {
+      console.error("runtime settings unavailable", error.code ?? "unknown");
+      throw new Error("runtime_settings_unavailable");
+    }
+    value = data?.value;
+  }
+  const settings = normalizeRuntimeSettings(value);
+  // Before a founder changes quotas, keep any existing LIMIT_* secrets authoritative.
+  if (!settings.quotasManaged) {
+    for (const kind of ["chat", "search", "aux", "transcribe"] as const) {
+      const legacy = quotaFor(kind, env);
+      for (const tier of ["free", "premium"] as const) {
+        settings.quotas[tier][kind] = { ...settings.quotas[tier][kind], perDay: legacy.perDay };
+      }
+    }
+  }
+  return settings;
+}
+
+// deno-lint-ignore no-explicit-any
+async function loadAccountAccess(adminClient: any, userId: string): Promise<{ active: boolean; tier: Tier }> {
+  if (!adminClient) return { active: true, tier: "free" };
+  const { data, error } = await adminClient.from("admin_account_control").select("tier,account_status").eq("user_id", userId).maybeSingle();
+  if (error && missingAdminTable(error)) return { active: true, tier: "free" };
+  if (error) {
+    console.error("account access check unavailable", error.code ?? "unknown");
+    throw new Error("account_access_unavailable");
+  }
+  return { active: data?.account_status !== "suspended", tier: data?.tier === "premium" ? "premium" : "free" };
+}
+
+// deno-lint-ignore no-explicit-any
+async function recordAiEvent(adminClient: any, userId: string, kind: "chat" | "search" | "aux" | "transcribe", provider: Provider | null, succeeded: boolean, errorCode: string | null = null) {
+  if (!adminClient) return;
+  const model = provider ? PROVIDERS[provider].model().slice(0, 120) : null;
+  try {
+    const { error } = await adminClient.from("admin_ai_events").insert({
+      user_id: userId,
+      kind,
+      provider,
+      model,
+      succeeded,
+      error_code: errorCode,
+    });
+    if (error && !missingAdminTable(error)) console.error("AI telemetry insert failed", error.code ?? "unknown");
+  } catch {
+    // Telemetry must not interrupt the user's existing AI request.
+  }
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -586,16 +646,19 @@ async function generateWith(provider: Provider, prompt: string): Promise<string>
   return String(data.content?.[0]?.text ?? "").trim();
 }
 
-async function generate(prompt: string): Promise<string> {
-  const list = available();
+// deno-lint-ignore no-explicit-any
+async function generate(prompt: string, settings: RuntimeSettings, quotaClient: any, userId: string, kind: "aux" | "transcribe" = "aux"): Promise<string> {
+  const list = available(settings);
   if (!list.length) throw new Error("no provider");
   let lastError: unknown;
   for (const p of list) {
     try {
       const out = await generateWith(p, prompt);
+      await recordAiEvent(quotaClient, userId, kind, p, !!out, out ? null : "empty_response");
       if (out) return out;
     } catch (e) {
       lastError = e;
+      await recordAiEvent(quotaClient, userId, kind, p, false, "provider_failed");
       console.error(`aux ${p} failed`, String(e));
     }
   }
@@ -617,9 +680,13 @@ function parseStringArray(raw: string): string[] {
 // ---------- action handlers ----------
 
 // deno-lint-ignore no-explicit-any
-async function handleChat(supabase: any, quotaClient: any, userId: string, input: Extract<ReturnType<typeof validateChat>, { ok: true }>, req: Request) {
+async function handleChat(supabase: any, quotaClient: any, userId: string, tier: Tier, settings: RuntimeSettings, input: Extract<ReturnType<typeof validateChat>, { ok: true }>, req: Request) {
   const v = input.value;
-  const ok = available();
+  if (v.provider !== "auto" && !settings.models[v.provider as Provider]) return json({ error: "This AI model is disabled by the administrator." }, 403);
+  if (v.search && !settings.features.search) return json({ error: "Web search is currently disabled." }, 403);
+  if (v.projectId && !settings.features.projects) return json({ error: "Project workspaces are currently disabled." }, 403);
+  if (v.messages.some((message) => message.files.length > 0) && !settings.features.attachments) return json({ error: "File attachments are currently disabled." }, 403);
+  const ok = available(settings);
   if (!ok.length) return json({ error: "No AI provider is connected on the server yet. See the README, step 5." }, 500);
 
   // Auto = try every connected AI in order. A specific choice is respected: no silent switching.
@@ -627,7 +694,7 @@ async function handleChat(supabase: any, quotaClient: any, userId: string, input
   let candidates: Provider[] = wanted ? [wanted] : ok;
 
   // Web search runs on Gemini (Google Search grounding). It is tried first when it is on.
-  const searchPossible = v.search && PROVIDERS.gemini.key().length > 0;
+  const searchPossible = v.search && settings.features.search && settings.models.gemini && PROVIDERS.gemini.key().length > 0;
   if (searchPossible && (!wanted || wanted === "gemini")) {
     candidates = ["gemini", ...candidates.filter((p) => p !== "gemini")];
   }
@@ -674,7 +741,7 @@ async function handleChat(supabase: any, quotaClient: any, userId: string, input
   if (projectName) extra += `\nThe current workspace is "${projectName}". Keep the user's request grounded in this project when relevant.`;
   if (profile?.display_name) extra += `\nThe user's name is ${String(profile.display_name).slice(0, 80)}.`;
 
-  if (profile?.memory_enabled !== false) {
+  if (settings.features.memory && profile?.memory_enabled !== false) {
     const { data: mems } = await supabase
       .from("memories")
       .select("content")
@@ -720,7 +787,7 @@ async function handleChat(supabase: any, quotaClient: any, userId: string, input
   // Search is billed by Google per query, so it has its own, smaller quota. Over it? Answer without search.
   let searchAllowed = searchPossible;
   if (searchAllowed) {
-    const q = await consume(quotaClient, userId, "search");
+    const q = await consume(quotaClient, userId, "search", tier, settings);
     if (!q.ok) searchAllowed = false;
   }
 
@@ -761,6 +828,7 @@ async function handleChat(supabase: any, quotaClient: any, userId: string, input
             },
             { search, mode: v.mode, signal: client.signal },
           );
+          await recordAiEvent(quotaClient, userId, search ? "search" : "chat", provider, !r.failed, r.failed ? "provider_failed" : null);
           if (client.signal.aborted) break;
           if (r.failed && !r.produced && i < candidates.length - 1) continue; // fall back to the next AI
           if (r.failed) send({ error: lastError || "Something went wrong." });
@@ -789,7 +857,8 @@ async function handleChat(supabase: any, quotaClient: any, userId: string, input
 }
 
 // deno-lint-ignore no-explicit-any
-async function handleRemember(supabase: any, userId: string, body: any) {
+async function handleRemember(supabase: any, userId: string, body: any, settings: RuntimeSettings, quotaClient: any) {
+  if (!settings.features.memory) return json({ added: 0 });
   const { data: profile } = await supabase
     .from("profiles")
     .select("memory_enabled")
@@ -829,7 +898,7 @@ Rules:
   let facts: string[] = [];
   try {
     const have = new Set((existing ?? []).map((m: { content: string }) => m.content.trim().toLowerCase()));
-    facts = parseStringArray(await generate(prompt))
+    facts = parseStringArray(await generate(prompt, settings, quotaClient, userId))
       .map((f) => f.trim())
       .filter((f) => f.length > 2 && f.length <= 200 && !have.has(f.toLowerCase()))
       .slice(0, 3);
@@ -849,7 +918,9 @@ Rules:
 
 // Speech to text for voice conversations. Audio goes to Gemini from the server; nothing is stored.
 // deno-lint-ignore no-explicit-any
-async function handleTranscribe(body: any) {
+async function handleTranscribe(body: any, settings: RuntimeSettings) {
+  if (!settings.features.voiceInput) return json({ error: "Voice input is currently disabled." }, 403);
+  if (!settings.models.gemini) return json({ error: "Gemini is currently disabled." }, 403);
   const key = PROVIDERS.gemini.key();
   if (!key) return json({ error: "Voice input needs the Gemini key on the server." }, 500);
   const b64 = String(body.audio ?? "");
@@ -901,7 +972,8 @@ async function handleTranscribe(body: any) {
   return json({ text });
 }
 
-async function handleSuggest(body: { user?: string; assistant?: string; mode?: string }) {
+// deno-lint-ignore no-explicit-any
+async function handleSuggest(body: { user?: string; assistant?: string; mode?: string }, settings: RuntimeSettings, quotaClient: any, userId: string) {
   const prompt = `Suggest 3 short follow-up messages the user might send next in this chat.
 
 User said: ${String(body.user ?? "").slice(0, 800)}
@@ -913,7 +985,7 @@ Rules:
 - Same language as the user.
 - Return ONLY a JSON array of 3 strings.`;
   try {
-    const list = parseStringArray(await generate(prompt))
+    const list = parseStringArray(await generate(prompt, settings, quotaClient, userId))
       .map((s) => s.trim().replace(/^["']|["']$/g, ""))
       .filter((s) => s.length > 2 && s.length <= 90)
       .slice(0, 3);
@@ -927,14 +999,15 @@ Rules:
 // ---------- per-user usage limits ----------
 
 // deno-lint-ignore no-explicit-any
-async function consume(quotaClient: any, userId: string, kind: QuotaKind): Promise<{ ok: boolean; retryAfter: number; day: boolean; global: boolean; broken: boolean }> {
+async function consume(quotaClient: any, userId: string, kind: QuotaKind, tier: Tier, settings: RuntimeSettings): Promise<{ ok: boolean; retryAfter: number; day: boolean; global: boolean; broken: boolean }> {
   if (!quotaClient) return { ok: false, retryAfter: 30, day: false, global: false, broken: true };
   const q = quotaFor(kind, env);
+  const perDay = settings.quotasManaged && kind !== "delete" ? quotaForTier(settings, tier, kind).perDay : q.perDay;
   const { data, error } = await quotaClient.rpc("consume_quota", {
     p_user_id: userId,
     p_kind: kind,
     p_per_minute: q.perMinute,
-    p_per_day: q.perDay,
+    p_per_day: perDay,
     p_global_per_day: globalPerDay(kind, env),
   });
   if (error || !data) {
@@ -993,6 +1066,16 @@ Deno.serve(async (req) => {
   const body: any = parsed.value;
   if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Bad request." }, 400);
 
+  let settings: RuntimeSettings;
+  let account: { active: boolean; tier: Tier };
+  try {
+    settings = await loadRuntimeSettings(quotaClient);
+    account = await loadAccountAccess(quotaClient, auth.user.id);
+  } catch {
+    return json({ error: "The account controls are temporarily unavailable. Please try again shortly." }, 503);
+  }
+  if (!account.active) return json({ error: "This account is suspended. Contact Turzam support." }, 403);
+
   if (body.action === "models") {
     return json({
       providers: ORDER.map((id) => ({
@@ -1000,14 +1083,24 @@ Deno.serve(async (req) => {
         name: PROVIDERS[id].name,
         vendor: PROVIDERS[id].vendor,
         model: PROVIDERS[id].model(),
-        available: PROVIDERS[id].key().length > 0,
+        available: settings.models[id] && PROVIDERS[id].key().length > 0,
       })),
-      search: PROVIDERS.gemini.key().length > 0,
-      voiceInput: PROVIDERS.gemini.key().length > 0,
+      search: settings.features.search && settings.models.gemini && PROVIDERS.gemini.key().length > 0,
+      voiceInput: settings.features.voiceInput && settings.models.gemini && PROVIDERS.gemini.key().length > 0,
+      maintenance: settings.maintenance.enabled ? settings.maintenance.message : null,
+      features: {
+        attachments: settings.features.attachments,
+        projects: settings.features.projects,
+        memory: settings.features.memory,
+        search: settings.features.search,
+        voiceInput: settings.features.voiceInput,
+      },
     });
   }
 
-  if (!available().length) {
+  if (settings.maintenance.enabled) return json({ error: settings.maintenance.message }, 503);
+
+  if (!available(settings).length) {
     return json({ error: "The server has no AI key yet. Add GEMINI_API_KEY (see the README, step 5)." }, 500);
   }
 
@@ -1016,35 +1109,44 @@ Deno.serve(async (req) => {
       case "chat": {
         const input = validateChat(body);
         if (!input.ok) return json({ error: input.error }, 400);
-        const searchError = searchConfigurationError(input.value.search, input.value.provider, PROVIDERS.gemini.key().length > 0);
+        if (input.value.search && !settings.features.search) return json({ error: "Web search is currently disabled." }, 403);
+        if (input.value.search && !settings.models.gemini) return json({ error: "Gemini is disabled; web search is unavailable." }, 403);
+        const searchError = searchConfigurationError(input.value.search, input.value.provider, settings.models.gemini && PROVIDERS.gemini.key().length > 0);
         if (searchError) return json({ error: searchError }, 400);
-        const q = await consume(quotaClient, auth.user.id, "chat");
+        const q = await consume(quotaClient, auth.user.id, "chat", account.tier, settings);
         if (!q.ok) return limitResponse(q);
-        return await handleChat(supabase, quotaClient, auth.user.id, input, req);
+        return await handleChat(supabase, quotaClient, auth.user.id, account.tier, settings, input, req);
       }
       case "title": {
-        const q = await consume(quotaClient, auth.user.id, "aux");
+        const q = await consume(quotaClient, auth.user.id, "aux", account.tier, settings);
         if (!q.ok) return limitResponse(q);
         const text = String(body.text ?? "").slice(0, 600);
         const title = await generate(
           `Write a title of 2 to 5 words for a chat that starts with the message below. Same language as the message. No quotes, no ending punctuation. Reply with the title only.\n\nMessage:\n${text}`,
+          settings,
+          quotaClient,
+          auth.user.id,
         );
         return json({ title: title.replace(/["'.\n]/g, "").slice(0, 60) || "New chat" });
       }
       case "remember": {
-        const q = await consume(quotaClient, auth.user.id, "aux");
+        const q = await consume(quotaClient, auth.user.id, "aux", account.tier, settings);
         if (!q.ok) return limitResponse(q);
-        return await handleRemember(supabase, auth.user.id, body);
+        return await handleRemember(supabase, auth.user.id, body, settings, quotaClient);
       }
       case "suggest": {
-        const q = await consume(quotaClient, auth.user.id, "aux");
+        const q = await consume(quotaClient, auth.user.id, "aux", account.tier, settings);
         if (!q.ok) return limitResponse(q);
-        return await handleSuggest(body);
+        return await handleSuggest(body, settings, quotaClient, auth.user.id);
       }
       case "transcribe": {
-        const q = await consume(quotaClient, auth.user.id, "transcribe");
+        if (!settings.features.voiceInput) return json({ error: "Voice input is currently disabled." }, 403);
+        if (!settings.models.gemini) return json({ error: "Gemini is currently disabled." }, 403);
+        const q = await consume(quotaClient, auth.user.id, "transcribe", account.tier, settings);
         if (!q.ok) return limitResponse(q);
-        return await handleTranscribe(body);
+        const response = await handleTranscribe(body, settings);
+        await recordAiEvent(quotaClient, auth.user.id, "transcribe", "gemini", response.ok, response.ok ? null : "transcription_failed");
+        return response;
       }
       default:
         return json({ error: "Unknown action." }, 400);

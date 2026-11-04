@@ -31,6 +31,7 @@ React Native + Expo + TypeScript app for iOS and Android. Supabase handles login
 | **Gemini API key** (required) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
 | OpenAI key (optional, enables ChatGPT) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
 | Anthropic key (optional, enables Claude) | `supabase/.env`, uploaded in Step 5 | **Never** in the app |
+| Founder Auth UUID/email and access code (optional) | Supabase Function Secrets only | **Never** in the app or GitHub |
 | Supabase **service_role** key | **You never paste it anywhere**: not in `.env`, not in `supabase/.env`, not in GitHub, not in the app. Supabase provides it to trusted Edge Functions at runtime. The chat function uses it only for server-side quota checks; `delete-account` uses it for confirmed file/account deletion. | Never |
 
 **Only two places ever hold keys on your computer:**
@@ -38,7 +39,7 @@ React Native + Expo + TypeScript app for iOS and Android. Supabase handles login
 | File | Holds | Created with |
 |---|---|---|
 | `.env` (project folder) | `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY` | `copy .env.example .env` |
-| `supabase/.env` | `GEMINI_API_KEY` (required), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (optional), optional limit settings | `copy supabase\.env.example supabase\.env` |
+| `supabase/.env` | `GEMINI_API_KEY` (required), provider keys, optional limits and founder-only secrets | `copy supabase\.env.example supabase\.env` |
 
 Both are in `.gitignore`, so GitHub never sees them. After filling them in, run `npm run check:env`: it tells you exactly what is missing or in the wrong file (for example an AI key pasted into `.env`, or the service-role key used by mistake) and never prints a secret. `npm run check:secrets` scans the files git tracks for keys, and CI runs it on every push.
 
@@ -83,8 +84,13 @@ npx supabase link --project-ref YOUR-PROJECT-REF
 npx supabase secrets set --env-file supabase/.env
 npx supabase functions deploy chat
 npx supabase functions deploy delete-account
+npx supabase functions deploy founder-admin
 ```
 Added a key later? Repeat only the `secrets set` line, then reopen the app.
+
+**Founder panel setup:** create/sign in to the founder's Supabase Auth account first. In the ignored `supabase/.env`, set either `FOUNDER_USER_ID` to that account's Auth UUID (recommended) or `FOUNDER_ADMIN_EMAIL` to its verified email, plus a private `FOUNDER_ACCESS_CODE`. Keep all three out of the Expo `.env`, app source, and GitHub. Upload them using the same `secrets set --env-file` command and deploy both `chat` and `founder-admin`. In the existing chat, send the exact phrase `I AM THE FOUNDER OF TURZAM AI`, then enter the code when prompted. The challenge and code are not sent to AI or saved in chat; the code is checked server-side and the short-lived admin session is kept only in memory. There is no visible admin button. Dashboard APIs independently verify the Supabase user and admin session; a direct route is not authorization.
+
+The panel reads real Auth/database records only. It includes user status/tier administration, activity and registration metrics, AI usage/errors, server-enforced feature/model/maintenance switches, audited actions, and in-app announcements. It does not read conversations or expose credentials. Revenue and paid-subscription metrics remain unavailable until a billing provider is actually integrated; premium access changes here are entitlements, not payment transactions. Daily active-user reporting starts accruing real heartbeats after this app version is deployed; no historical activity is fabricated.
 
 **6. Run the app**
 ```powershell
@@ -104,6 +110,7 @@ Phone app ──(your login token)──> Supabase Edge Function "chat" ──(s
 - `src/` components, chat logic (`hooks/useChat.ts`), theme, modes, attachments.
 - `supabase/schema.sql` tables, security rules, private file storage.
 - `supabase/functions/chat/index.ts` is the only code that touches AI provider keys (shared limits and checks are in `supabase/functions/_shared/limits.ts`). Trusted Edge Functions use the service-role key only server-side; chat uses it for the quota RPC, while account deletion uses it for confirmed cleanup. Chat reads attachments with the user's own token, so it cannot read another user's files.
+- `app/founder-admin.tsx` is a hidden authenticated route; the `founder-admin` Edge Function is the only data/control API and uses server-side identity checks plus short-lived sessions.
 
 Models can be changed any time with `GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL` in `supabase/.env`, then repeat the `secrets set` command. No app update needed.
 
@@ -141,7 +148,7 @@ If you change `supabase/.env`, run `npx supabase secrets set --env-file supabase
 
 All of this is enforced **on the server**, so a modified app cannot get around it.
 
-- **Per-user rate limits** (counted in the database, function `consume_quota`): chat 12 per minute and 150 per day, web search 6 per minute and 40 per day, titles/memory/ideas 30 per minute and 400 per day, voice 10 per minute and 100 per day. Only trusted Edge Functions can execute the quota RPC; API roles cannot manipulate counters or consume the global cap directly. Change limits with `LIMIT_CHAT_PER_DAY` and similar secrets (see `supabase/.env.example`). If you forget to run the latest `schema.sql`, the server refuses requests instead of running without limits.
+- **Per-user rate limits** (counted in the database, function `consume_quota`): chat 12 per minute and 150 per day, web search 6 per minute and 40 per day, titles/memory/ideas 30 per minute and 400 per day, voice 10 per minute and 100 per day. Only trusted Edge Functions can execute the quota RPC; API roles cannot manipulate counters or consume the global cap directly. Existing `LIMIT_*` secrets remain effective until the founder saves tier-specific daily caps in the panel; per-minute limits and optional global caps remain server-side safety controls. If you forget to run the latest `schema.sql`, the server refuses requests instead of running without limits.
 - **Total daily cap (optional):** `GLOBAL_CHAT_PER_DAY` and similar secrets stop the whole app at a daily number of calls, whoever makes them. Off until you set it. The check-then-count runs under a database lock per action type, so many users hitting it in the same instant cannot push it past the cap (proved by `npm run test:quota`).
 - **Input checks:** messages up to 12,000 characters, at most 40 messages and 120,000 characters of history per request, unknown modes/personalities ignored, malformed files dropped.
 - **Answer size:** `MAX_OUTPUT_TOKENS` (default 4096). Gemini 3.x counts its thinking in the same limit, so the server adds room for it. Gemini thinking defaults to `low` (cheapest); set `GEMINI_THINKING_LEVEL=medium` for better answers at higher cost. Gemini 3.x is run at its default temperature, as Google recommends.

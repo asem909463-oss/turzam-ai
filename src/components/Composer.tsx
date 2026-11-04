@@ -33,9 +33,10 @@ type Props = {
   /** Web search is on for the next answer. */
   searchOn?: boolean;
   onToggleSearch?: () => void;
+  attachmentsEnabled?: boolean;
 };
 
-export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, onVoice, searchOn, onToggleSearch }: Props) {
+export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, onVoice, searchOn, onToggleSearch, attachmentsEnabled = true }: Props) {
   const { colors } = useTheme();
   const styles = useStyles(make);
   const toast = useToast();
@@ -133,14 +134,16 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, o
       ) : null}
 
       <Animated.View style={[styles.box, box]}>
-        <PressableScale
-          label={`Attach files (${files.length}/${MAX_FILES})`}
-          style={styles.attach}
-          onPress={() => setMenu(true)}
-          disabled={busy}
-        >
-          <Ionicons name="add" size={26} color={colors.textDim} />
-        </PressableScale>
+        {attachmentsEnabled ? (
+          <PressableScale
+            label={`Attach files (${files.length}/${MAX_FILES})`}
+            style={styles.attach}
+            onPress={() => setMenu(true)}
+            disabled={busy}
+          >
+            <Ionicons name="add" size={26} color={colors.textDim} />
+          </PressableScale>
+        ) : null}
 
         <TextInput
           ref={inputRef}

@@ -9,7 +9,7 @@
     "ios": "expo start --ios",
     "typecheck": "tsc --noEmit",
     "test:edge": "node --experimental-strip-types --no-warnings --test supabase/functions/tests/*.test.ts",
-    "check:edge": "deno check supabase/functions/chat/index.ts supabase/functions/delete-account/index.ts && deno lint supabase/functions",
+    "check:edge": "deno check supabase/functions/chat/index.ts supabase/functions/delete-account/index.ts supabase/functions/founder-admin/index.ts && deno lint supabase/functions",
     "check": "npm run typecheck && npm run test:edge",
     "pin": "node scripts/pin-deps.mjs",
     "check:pinned": "node scripts/pin-deps.mjs --check",

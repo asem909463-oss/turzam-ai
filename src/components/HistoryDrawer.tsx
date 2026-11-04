@@ -38,6 +38,7 @@ type Props = {
   onRenameFolder: (id: string, name: string) => void;
   onDeleteFolder: (id: string) => void;
   onSearchMessages: (query: string) => Promise<MessageHit[]>;
+  features?: { projects?: boolean; memory?: boolean };
   onOpenMemory: () => void;
   onOpenProjects: () => void;
   onOpenSettings: () => void;
@@ -311,16 +312,20 @@ export function HistoryDrawer(p: Props) {
             <Text numberOfLines={1} style={styles.email}>
               {p.email}
             </Text>
-            <PressableScale onPress={p.onOpenProjects} style={styles.projectsBtn} label="Open project workspaces">
-              <Ionicons name="layers-outline" size={18} color={colors.accentInk} />
-              <Text style={styles.footerText}>Projects</Text>
-              <Ionicons name="chevron-forward" size={15} color={colors.textFaint} />
-            </PressableScale>
-            <View style={styles.footerBtns}>
-              <PressableScale onPress={p.onOpenMemory} style={styles.footerBtn} label="Memory">
-                <Ionicons name="albums-outline" size={19} color={colors.text} />
-                <Text style={styles.footerText}>Memory</Text>
+            {p.features?.projects !== false ? (
+              <PressableScale onPress={p.onOpenProjects} style={styles.projectsBtn} label="Open project workspaces">
+                <Ionicons name="layers-outline" size={18} color={colors.accentInk} />
+                <Text style={styles.footerText}>Projects</Text>
+                <Ionicons name="chevron-forward" size={15} color={colors.textFaint} />
               </PressableScale>
+            ) : null}
+            <View style={styles.footerBtns}>
+              {p.features?.memory !== false ? (
+                <PressableScale onPress={p.onOpenMemory} style={styles.footerBtn} label="Memory">
+                  <Ionicons name="albums-outline" size={19} color={colors.text} />
+                  <Text style={styles.footerText}>Memory</Text>
+                </PressableScale>
+              ) : null}
               <PressableScale onPress={p.onOpenSettings} style={styles.footerBtn} label="Settings">
                 <Ionicons name="settings-outline" size={19} color={colors.text} />
                 <Text style={styles.footerText}>Settings</Text>
