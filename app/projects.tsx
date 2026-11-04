@@ -91,16 +91,22 @@ export default function ProjectsScreen() {
         )}
         renderItem={({ item, index }) => (
           <Animated.View entering={FadeInDown.delay(Math.min(index, 8) * 45).duration(260)}>
-            <PressableScale onPress={() => router.push({ pathname: '/project', params: { id: item.id } })} style={styles.projectCard} scaleTo={0.985} label={`Open project ${item.name}`}>
-              <LinearGradient colors={[...gradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.projectMark}>
-                <Ionicons name="folder-open" size={19} color={colors.onAccent} />
-              </LinearGradient>
-              <View style={{ flex: 1 }}>
-                <Text numberOfLines={1} style={styles.projectName}>{item.name}</Text>
-                <Text style={styles.projectMeta}>Workspace · {item.instructions.trim() ? 'Instructions set' : 'Ready to shape'}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-            </PressableScale>
+            <View style={styles.projectCard}>
+              <PressableScale onPress={() => router.push({ pathname: '/project', params: { id: item.id } })} style={styles.projectMain} scaleTo={0.985} label={`Open project ${item.name}`}>
+                <LinearGradient colors={[...gradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.projectMark}>
+                  <Ionicons name="folder-open" size={19} color={colors.onAccent} />
+                </LinearGradient>
+                <View style={{ flex: 1 }}>
+                  <Text numberOfLines={1} style={styles.projectName}>{item.name}</Text>
+                  <Text style={styles.projectMeta}>Workspace · {item.instructions.trim() ? 'Instructions set' : 'Ready to shape'}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+              </PressableScale>
+              <PressableScale onPress={() => router.push({ pathname: '/', params: { projectId: item.id } })} style={styles.projectChat} label={`Start a chat in ${item.name}`}>
+                <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.accentInk} />
+                <Text style={styles.projectChatText}>Chat</Text>
+              </PressableScale>
+            </View>
           </Animated.View>
         )}
       />
@@ -141,7 +147,10 @@ const make = (t: Theme) => StyleSheet.create({
   introTitle: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 16 },
   introText: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 13, lineHeight: 19, marginTop: 4 },
   list: { paddingHorizontal: 16, paddingBottom: 28, gap: 10, flexGrow: 1 },
-  projectCard: { minHeight: 78, flexDirection: 'row', alignItems: 'center', gap: 13, padding: 14, backgroundColor: withAlpha(t.colors.surface, 0.94), borderRadius: radius.lg, borderWidth: 1, borderColor: t.colors.border },
+  projectCard: { minHeight: 78, flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, backgroundColor: withAlpha(t.colors.surface, 0.94), borderRadius: radius.lg, borderWidth: 1, borderColor: t.colors.border },
+  projectMain: { minHeight: 56, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 4 },
+  projectChat: { minHeight: 38, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: radius.md, backgroundColor: withAlpha(t.colors.accent, 0.10), borderWidth: 1, borderColor: withAlpha(t.colors.accent, 0.18) },
+  projectChatText: { color: t.colors.accentInk, fontFamily: fonts.uiBold, fontSize: 12 },
   projectMark: { width: 42, height: 42, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   projectName: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 16 },
   projectMeta: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 12, marginTop: 3 },

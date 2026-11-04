@@ -7,6 +7,7 @@ React Native + Expo + TypeScript app for iOS and Android. Supabase handles login
 ## What it does
 
 - **Founder mode** (default): strategy, pitch, pricing, outreach, hiring, operations. Plus Creative, Balanced, Deep Think, Coder and Tutor modes.
+- **Outcome Engine:** shape a goal, choose a plan/decision/launch/growth direction and timeframe, then review a structured Founder prompt before sending. Starting it from a project carries that workspace's existing context into chat.
 - **Attach images, PDFs and text files** (txt, md, csv, json, code). The AI reads them and answers from what is inside.
 - **Chat tools:** streaming answers, stop, regenerate, copy, rename, delete, search (titles and message text), suggested prompts, tappable follow-up ideas.
 - **Memory** you control: remembers lasting facts (your company, goals) and lets you edit or clear them.
@@ -213,6 +214,7 @@ People who sign in with Google or Apple have no Turzam password, so **Delete acc
 - Per-user quotas do not stop someone creating many accounts. Set `GLOBAL_CHAT_PER_DAY` (and the SEARCH / TRANSCRIBE ones) in `supabase/.env` as a total daily cap, turn on **Confirm email** in Supabase (Authentication, Providers, Email), and enable CAPTCHA under Authentication, Attack Protection before a public launch.
 - Account deletion removes your data in this app's Supabase project. It does not delete anything already sent to Google, OpenAI or Anthropic (see their own policies).
 - Web-search sources come as Google redirect links; they open the real page.
+- This app build has no in-app subscription or checkout integration; Settings shows the connected AI providers and makes that limitation clear instead of implying a paid plan.
 - Voice replies use the phone's voice for the language chosen in Settings; the app cannot detect the answer's language.
 - Deleting an account that signed in with Apple does not yet revoke the Apple token (Apple asks for this before App Store approval).
 - In-app toasts are included; push notifications are not.

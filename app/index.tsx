@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Speech from 'expo-speech';
 import * as StoreReview from 'expo-store-review';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -13,10 +14,9 @@ import { FollowUps } from '../src/components/FollowUps';
 import { HistoryDrawer } from '../src/components/HistoryDrawer';
 import { ImageViewer } from '../src/components/ImageViewer';
 import { VoiceOverlay } from '../src/components/VoiceOverlay';
-import { Logo } from '../src/components/Logo';
+import { StarSpinner } from '../src/components/Logo';
 import { MessageBubble } from '../src/components/MessageBubble';
 import { ModeSheet } from '../src/components/ModeSheet';
-import { Motto } from '../src/components/Motto';
 import { PressableScale } from '../src/components/PressableScale';
 import { ReviewPrompt } from '../src/components/ReviewPrompt';
 import { Skeleton } from '../src/components/Skeleton';
@@ -31,7 +31,7 @@ import { exportChat, type ExportFormat } from '../src/lib/export';
 import { cleanForSpeech } from '../src/lib/speech';
 import { dismissReviewPrompt, recordSuccessfulAnswer, snoozeReviewPrompt } from '../src/lib/reviews';
 import { greeting } from '../src/lib/utils';
-import { fonts, radius, Theme, withAlpha } from '../src/theme';
+import { darken, fonts, radius, Theme, withAlpha } from '../src/theme';
 import type { ChatMessage, ModeId } from '../src/types';
 
 const MODEL_LABEL: Record<string, string> = { auto: 'Auto', gemini: 'Gemini', openai: 'ChatGPT', anthropic: 'Claude' };
@@ -40,8 +40,6 @@ const QUICK_TOOLS: { id: string; label: string; icon: React.ComponentProps<typeo
   { id: 'study', label: 'Study', icon: 'school-outline', mode: 'tutor', prompt: 'Teach me this topic in clear, manageable steps. Use a concrete example, then check my understanding: [topic].' },
   { id: 'write', label: 'Write', icon: 'create-outline', mode: 'create', prompt: 'Help me write a polished, original draft for this purpose. Ask only if essential details are missing: [what I need to write].' },
   { id: 'code', label: 'Code', icon: 'code-slash-outline', mode: 'code', prompt: 'Help me solve this coding task. Give runnable code, explain key choices, and point out edge cases: [describe the task and language].' },
-  { id: 'translate', label: 'Translate', icon: 'language-outline', mode: 'balanced', prompt: 'Translate the text below into [target language]. Preserve its meaning, tone, names, and formatting. If the target language is not clear, ask me.\n\n[paste text here]' },
-  { id: 'summarize', label: 'Summarize', icon: 'list-outline', mode: 'balanced', prompt: 'Summarize the material below into the key points, decisions, and action items. Keep important names and numbers accurate.\n\n[paste text here]' },
 ];
 
 function pickFour<T>(list: T[], seed: number): T[] {
@@ -59,11 +57,11 @@ function pickFour<T>(list: T[], seed: number): T[] {
 export default function ChatScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, gradient } = useTheme();
   const styles = useStyles(make);
   const toast = useToast();
   const { user, profile } = useAuth();
-  const routeParams = useLocalSearchParams<{ projectId?: string; conversationId?: string }>();
+  const routeParams = useLocalSearchParams<{ projectId?: string; conversationId?: string; outcomePrompt?: string }>();
   const [answer, setAnswer] = useState<{ text: string; nonce: number } | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const handledRouteRef = useRef('');
@@ -91,17 +89,22 @@ export default function ChatScreen() {
   useEffect(() => {
     const projectId = typeof routeParams.projectId === 'string' ? routeParams.projectId : '';
     const conversationId = typeof routeParams.conversationId === 'string' ? routeParams.conversationId : '';
-    if (!projectId && !conversationId) {
+    const outcomePrompt = typeof routeParams.outcomePrompt === 'string' ? routeParams.outcomePrompt : '';
+    if (!projectId && !conversationId && !outcomePrompt) {
       handledRouteRef.current = '';
       return;
     }
-    const key = conversationId ? `chat:${conversationId}` : `project:${projectId}`;
+    const key = outcomePrompt ? `outcome:${projectId}:${outcomePrompt}` : conversationId ? `chat:${conversationId}` : `project:${projectId}`;
     if (handledRouteRef.current === key) return;
     handledRouteRef.current = key;
-    if (conversationId) chat.openConversation(conversationId);
+    if (outcomePrompt) {
+      chat.newChat(projectId || null);
+      chat.setMode('founder');
+      setPrefill({ text: outcomePrompt, nonce: Date.now() });
+    } else if (conversationId) chat.openConversation(conversationId);
     else chat.newChat(projectId);
-    router.setParams({ projectId: undefined, conversationId: undefined });
-  }, [routeParams.projectId, routeParams.conversationId, chat.openConversation, chat.newChat, router]);
+    router.setParams({ projectId: undefined, conversationId: undefined, outcomePrompt: undefined });
+  }, [routeParams.projectId, routeParams.conversationId, routeParams.outcomePrompt, chat.openConversation, chat.newChat, chat.setMode, router]);
 
   const mode = getMode(chat.mode);
   const persona = getPersona(chat.persona);
@@ -200,14 +203,37 @@ export default function ChatScreen() {
               <Skeleton width="85%" height={14} />
             </View>
           ) : empty ? (
-            <Animated.View key={mode.id} entering={FadeIn.duration(300)} style={styles.empty}>
-              <Logo size={112} />
-              <View style={{ marginTop: 14 }}>
-                <WordReveal words={greetWords} size={38} />
+            <Animated.ScrollView key={mode.id} entering={FadeIn.duration(300)} contentContainerStyle={styles.empty} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <View style={styles.homeIntro}>
+                <View style={styles.homeEyebrow}>
+                  <View style={styles.homeStar}><StarSpinner size={8} speed={4300} /></View>
+                  <Text style={styles.homeEyebrowText}>TURZAM AI · YOUR THOUGHT PARTNER</Text>
+                </View>
+                <WordReveal words={greetWords} size={36} />
+                <Text style={styles.homeSubtitle}>Powerful underneath. Effortless on the surface.</Text>
               </View>
-              <Animated.View entering={FadeInDown.delay(500).duration(500)} style={{ marginTop: 6, marginBottom: 20 }}>
-                <Motto size={19} />
-              </Animated.View>
+
+              <PressableScale onPress={() => router.push('/outcome')} style={styles.outcomeCard} scaleTo={0.985} label="Open Outcome Engine">
+                <LinearGradient colors={[darken(gradient[0], 0.18), darken(gradient[1], 0.14)]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.outcomeGradient}>
+                  <View style={styles.outcomeTop}>
+                    <View style={styles.outcomeIcon}><StarSpinner size={13} speed={3600} /></View>
+                    <View style={styles.outcomeText}>
+                      <Text style={styles.outcomeEyebrow}>OUTCOME ENGINE</Text>
+                      <Text style={styles.outcomeTitle}>Make progress you can point to.</Text>
+                      <Text style={styles.outcomeCopy}>Turn a goal into a measured result and one clear first move.</Text>
+                    </View>
+                    <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
+                  </View>
+                  <View style={styles.outcomeBottom}>
+                    <Text style={styles.outcomeTag}>PLAN  ·  DECIDE  ·  LAUNCH  ·  GROW</Text>
+                    <Text style={styles.outcomeAction}>Build an outcome <Ionicons name="arrow-forward" size={13} color="#FFFFFF" /></Text>
+                  </View>
+                </LinearGradient>
+              </PressableScale>
+
+              <View style={styles.sectionHeading}>
+                <View><Text style={styles.sectionTitle}>Jump straight in</Text><Text style={styles.sectionHint}>Choose a tool, then make it yours.</Text></View>
+              </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickTools} style={styles.quickToolsScroll}>
                 {QUICK_TOOLS.map((tool) => (
                   <PressableScale
@@ -223,7 +249,7 @@ export default function ChatScreen() {
                       }
                       setPrefill({ text: tool.prompt, nonce: Date.now() });
                     }}
-                    style={[styles.quickTool, { borderColor: withAlpha(mode.color, 0.35), backgroundColor: withAlpha(mode.color, 0.08) }]}
+                    style={[styles.quickTool, { borderColor: withAlpha(mode.color, 0.28), backgroundColor: withAlpha(mode.color, 0.07) }]}
                     label={`${tool.label} assistant`}
                   >
                     <Ionicons name={tool.icon} size={15} color={mode.color} />
@@ -231,31 +257,32 @@ export default function ChatScreen() {
                   </PressableScale>
                 ))}
               </ScrollView>
+              <View style={styles.cardsHeading}>
+                <Text style={styles.sectionTitle}>Try a quick start</Text>
+                <PressableScale onPress={() => setSeed((x) => x + 1)} style={styles.shuffle} label="Shuffle ideas">
+                  <Ionicons name="shuffle" size={15} color={colors.accentInk} />
+                  <Text style={styles.shuffleText}>Shuffle</Text>
+                </PressableScale>
+              </View>
               <View style={styles.cards}>
                 {ideas.map((s, i) => (
-                  <Animated.View key={`${seed}-${s.title}`} entering={FadeInDown.delay(260 + i * 70).duration(380)} style={styles.cardWrap}>
+                  <Animated.View key={`${seed}-${s.title}`} entering={FadeInDown.delay(180 + i * 55).duration(300)} style={styles.cardWrap}>
                     <PressableScale
                       onPress={() => setPrefill({ text: s.prompt, nonce: Date.now() })}
-                      scaleTo={0.96}
-                      style={[styles.card, { borderColor: withAlpha(mode.color, 0.32) }]}
+                      scaleTo={0.97}
+                      style={[styles.card, { borderColor: withAlpha(mode.color, 0.24) }]}
                       label={s.title}
                     >
-                      <View style={[styles.cardIcon, { backgroundColor: withAlpha(mode.color, 0.16) }]}>
+                      <View style={[styles.cardIcon, { backgroundColor: withAlpha(mode.color, 0.14) }]}>
                         <Ionicons name={mode.icon} size={14} color={mode.color} />
                       </View>
                       <Text style={styles.cardTitle}>{s.title}</Text>
-                      <Text numberOfLines={2} style={styles.cardPrompt}>
-                        {s.prompt}
-                      </Text>
+                      <Text numberOfLines={2} style={styles.cardPrompt}>{s.prompt}</Text>
                     </PressableScale>
                   </Animated.View>
                 ))}
               </View>
-              <PressableScale onPress={() => setSeed((x) => x + 1)} style={styles.shuffle} label="Shuffle ideas">
-                <Ionicons name="shuffle" size={16} color={colors.textDim} />
-                <Text style={styles.shuffleText}>Shuffle ideas</Text>
-              </PressableScale>
-            </Animated.View>
+            </Animated.ScrollView>
           ) : (
             <FlatList
               inverted
@@ -357,6 +384,10 @@ export default function ChatScreen() {
           setDrawerOpen(false);
           router.push('/projects');
         }}
+        onOpenOutcome={() => {
+          setDrawerOpen(false);
+          router.push('/outcome');
+        }}
         onOpenSettings={() => {
           setDrawerOpen(false);
           router.push('/settings');
@@ -448,8 +479,28 @@ const make = (t: Theme) =>
     projectBannerText: { flex: 1, color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 12 },
     column: { flex: 1, width: '100%', maxWidth: 760, alignSelf: 'center' },
     skeletons: { padding: 20, gap: 12, paddingTop: 30 },
-    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
-    cards: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignSelf: 'stretch' },
+    empty: { flexGrow: 1, alignItems: 'stretch', paddingHorizontal: 18, paddingTop: 12, paddingBottom: 14, gap: 14, width: '100%', maxWidth: 760, alignSelf: 'center' },
+    homeIntro: { alignItems: 'flex-start', gap: 6, paddingHorizontal: 2 },
+    homeEyebrow: { height: 24, flexDirection: 'row', alignItems: 'center', gap: 7 },
+    homeStar: { width: 20, height: 20, borderRadius: 10, backgroundColor: withAlpha(t.colors.accent, 0.15), alignItems: 'center', justifyContent: 'center' },
+    homeEyebrowText: { color: t.colors.accentInk, fontFamily: fonts.uiBold, fontSize: 9.5, letterSpacing: 1.2 },
+    homeSubtitle: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 13.5, lineHeight: 19 },
+    outcomeCard: { borderRadius: radius.xl, overflow: 'hidden', shadowColor: t.colors.accent2, shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 4 },
+    outcomeGradient: { padding: 15, gap: 14 },
+    outcomeTop: { flexDirection: 'row', alignItems: 'center', gap: 11 },
+    outcomeIcon: { width: 44, height: 44, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.18)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.26)', alignItems: 'center', justifyContent: 'center' },
+    outcomeText: { flex: 1, gap: 3 },
+    outcomeEyebrow: { color: 'rgba(255,255,255,0.82)', fontFamily: fonts.uiBold, fontSize: 9, letterSpacing: 1.3 },
+    outcomeTitle: { color: '#FFFFFF', fontFamily: fonts.uiBold, fontSize: 17, lineHeight: 21 },
+    outcomeCopy: { color: 'rgba(255,255,255,0.88)', fontFamily: fonts.uiRegular, fontSize: 12, lineHeight: 17 },
+    outcomeBottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingTop: 11, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.24)' },
+    outcomeTag: { color: 'rgba(255,255,255,0.83)', fontFamily: fonts.uiBold, fontSize: 8.5, letterSpacing: 0.7 },
+    outcomeAction: { color: '#FFFFFF', fontFamily: fonts.uiBold, fontSize: 11, flexDirection: 'row', alignItems: 'center' },
+    sectionHeading: { marginTop: 1 },
+    sectionTitle: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 16 },
+    sectionHint: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 12, lineHeight: 17, marginTop: 2 },
+    cardsHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: -2 },
+    cards: { flexDirection: 'row', flexWrap: 'wrap', gap: 9, alignSelf: 'stretch' },
     cardWrap: { width: '48.6%', flexGrow: 1 },
     card: {
       backgroundColor: withAlpha(t.colors.surface, 0.94),
@@ -457,15 +508,15 @@ const make = (t: Theme) =>
       borderWidth: 1,
       padding: 14,
       gap: 6,
-      minHeight: 118,
+      minHeight: 110,
     },
     cardIcon: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
     cardTitle: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 15 },
     cardPrompt: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 13, lineHeight: 18 },
-    shuffle: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, paddingVertical: 8, paddingHorizontal: 12 },
-    shuffleText: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 13 },
-    quickToolsScroll: { alignSelf: 'stretch', flexGrow: 0, marginTop: -8, marginBottom: 10 },
-    quickTools: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 2 },
+    shuffle: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 6, paddingHorizontal: 9, borderRadius: radius.pill, backgroundColor: withAlpha(t.colors.accent, 0.1) },
+    shuffleText: { color: t.colors.accentInk, fontFamily: fonts.uiBold, fontSize: 11 },
+    quickToolsScroll: { alignSelf: 'stretch', flexGrow: 0, marginTop: -5, marginBottom: 1 },
+    quickTools: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 2, paddingVertical: 2 },
     quickTool: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, borderRadius: 17, borderWidth: 1 },
     quickToolText: { fontFamily: fonts.ui, fontSize: 12 },
     disclaimer: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 11.5, textAlign: 'center', marginTop: 6 },

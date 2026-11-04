@@ -161,6 +161,12 @@ export default function ProjectScreen() {
           </View>
         </Animated.View>
 
+        <PressableScale onPress={() => router.push({ pathname: '/outcome', params: { projectId: project.id, projectName: project.name } })} style={styles.outcomeLink} label={`Plan an outcome for ${project.name}`}>
+          <View style={styles.outcomeLinkIcon}><Ionicons name="sparkles" size={18} color={colors.accentInk} /></View>
+          <View style={{ flex: 1 }}><Text style={styles.outcomeLinkTitle}>Plan the next outcome</Text><Text style={styles.outcomeLinkHint}>Use this workspace’s context to find a clear first move.</Text></View>
+          <Ionicons name="arrow-forward" size={17} color={colors.accentInk} />
+        </PressableScale>
+
         <View style={styles.sectionCard}>
           <View style={styles.sectionTitleRow}>
             <View style={styles.sectionIcon}><Ionicons name="compass-outline" size={17} color={colors.accentInk} /></View>
@@ -229,6 +235,10 @@ const make = (t: Theme) => StyleSheet.create({
   deleteButton: { width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.surface, alignItems: 'center', justifyContent: 'center' },
   hero: { minHeight: 96, flexDirection: 'row', alignItems: 'center', gap: 15, padding: 18, borderRadius: radius.xl, backgroundColor: withAlpha(t.colors.surface, 0.88), borderWidth: 1, borderColor: t.colors.border },
   heroIcon: { width: 54, height: 54, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  outcomeLink: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 11, padding: 13, borderRadius: radius.lg, backgroundColor: withAlpha(t.colors.accent, 0.09), borderWidth: 1, borderColor: withAlpha(t.colors.accent, 0.22) },
+  outcomeLinkIcon: { width: 38, height: 38, borderRadius: 14, backgroundColor: withAlpha(t.colors.accent, 0.16), alignItems: 'center', justifyContent: 'center' },
+  outcomeLinkTitle: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 14 },
+  outcomeLinkHint: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 11.5, lineHeight: 16, marginTop: 2 },
   eyebrow: { color: t.colors.accentInk, fontFamily: fonts.uiBold, fontSize: 10, letterSpacing: 1.2 },
   heroName: { color: t.colors.text, fontFamily: fonts.display, fontSize: 27, marginTop: 2 },
   sectionCard: { padding: 16, borderRadius: radius.xl, backgroundColor: withAlpha(t.colors.surface, 0.94), borderWidth: 1, borderColor: t.colors.border, gap: 12 },

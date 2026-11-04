@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -76,7 +76,7 @@ function Segmented({ value, onChange }: { value: Scheme; onChange: (s: Scheme) =
 export default function Settings() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, gradient } = useTheme();
   const styles = useStyles(make);
   const toast = useToast();
   const { prefs, setScheme, setAccent, setFollowUps } = usePrefs();
@@ -90,6 +90,8 @@ export default function Settings() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [instructions, setInstructions] = useState(profile?.custom_instructions ?? '');
+  const settingsScroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const modelChoicesY = useRef(0);
 
   async function save(patch: Parameters<typeof updateProfile>[0], okText?: string) {
     const err = await updateProfile(patch);
@@ -166,7 +168,25 @@ export default function Settings() {
     <View style={{ flex: 1 }}>
       <Aurora />
       <ScreenHeader title="Settings" />
-      <ScrollView contentContainerStyle={[styles.body, { paddingBottom: insets.bottom + 30 }]} keyboardShouldPersistTaps="handled">
+      <ScrollView ref={settingsScroll} contentContainerStyle={[styles.body, { paddingBottom: insets.bottom + 30 }]} keyboardShouldPersistTaps="handled">
+        <Animated.View entering={FadeInDown.duration(300)} style={styles.accessCard}>
+          <View style={styles.accessHeader}>
+            <LinearGradient colors={[...gradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.accessMark}><Ionicons name="sparkles" size={20} color={colors.onAccent} /></LinearGradient>
+            <View style={{ flex: 1 }}><Text style={styles.accessEyebrow}>AI ACCESS · PLAN CLARITY</Text><Text style={styles.accessTitle}>Know what’s connected.</Text></View>
+          </View>
+          <Text style={styles.accessCopy}>
+            {providers === null ? 'Checking secure AI access…' : connected.length ? `${connected.length} AI provider${connected.length === 1 ? '' : 's'} available: ${connected.map((p) => p.name).join(', ')}.` : 'No AI provider is connected yet. Available models are managed securely on the Turzam server.'}
+          </Text>
+          <View style={styles.accessStatus}>
+            <View style={[styles.statusDot, { backgroundColor: connected.length ? colors.success : providers === null ? colors.accent : colors.textFaint }]} />
+            <Text style={styles.accessStatusText}>{providers === null ? (providersError ? 'Could not check access' : 'Checking provider access') : connected.length ? 'Provider access is ready' : 'Waiting for a provider connection'}</Text>
+          </View>
+          <Text style={styles.accessNote}>Subscriptions and in-app checkout aren’t configured in this build. Provider keys stay server-side; nothing here asks you to pay.</Text>
+          <PressableScale onPress={() => settingsScroll.current?.scrollTo({ y: modelChoicesY.current, animated: true })} style={styles.accessButton} label="Review available AI choices">
+            <Text style={styles.accessButtonText}>Review AI choices</Text><Ionicons name="arrow-down" size={15} color={colors.accentInk} />
+          </PressableScale>
+        </Animated.View>
+
         <Animated.View entering={FadeInDown.duration(300)} style={styles.card}>
           <Text style={styles.label}>Your name</Text>
           <TextInput
@@ -204,7 +224,7 @@ export default function Settings() {
           </View>
         </Animated.View>
 
-        <Animated.View entering={FadeInDown.delay(120).duration(300)} style={styles.card}>
+        <Animated.View entering={FadeInDown.delay(120).duration(300)} style={styles.card} onLayout={(e) => { modelChoicesY.current = e.nativeEvent.layout.y; }}>
           <Text style={styles.label}>Default mode for new chats</Text>
           <View style={styles.chips}>
             {MODES.map((m) => {
@@ -452,6 +472,17 @@ export default function Settings() {
 const make = (t: Theme) =>
   StyleSheet.create({
     body: { paddingHorizontal: 16, gap: 14, paddingTop: 6, width: '100%', maxWidth: 720, alignSelf: 'center' },
+    accessCard: { backgroundColor: withAlpha(t.colors.surface, 0.96), borderRadius: radius.xl, borderWidth: 1, borderColor: withAlpha(t.colors.accent, 0.3), padding: 17, gap: 10 },
+    accessHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    accessMark: { width: 44, height: 44, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+    accessEyebrow: { color: t.colors.accentInk, fontFamily: fonts.uiBold, fontSize: 9.5, letterSpacing: 1 },
+    accessTitle: { color: t.colors.text, fontFamily: fonts.display, fontSize: 25, marginTop: 1 },
+    accessCopy: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 13, lineHeight: 19 },
+    accessStatus: { minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, borderRadius: radius.md, backgroundColor: t.colors.bgElevated, borderWidth: 1, borderColor: t.colors.border },
+    accessStatusText: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 12 },
+    accessNote: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 11.5, lineHeight: 17 },
+    accessButton: { alignSelf: 'flex-start', minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11, borderRadius: radius.md, backgroundColor: withAlpha(t.colors.accent, 0.1) },
+    accessButtonText: { color: t.colors.accentInk, fontFamily: fonts.uiBold, fontSize: 12 },
     card: {
       backgroundColor: withAlpha(t.colors.surface, 0.96),
       borderRadius: radius.xl,

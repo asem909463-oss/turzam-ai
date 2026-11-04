@@ -60,6 +60,7 @@ function Gate() {
           <Stack.Screen name="memory" />
           <Stack.Screen name="projects" />
           <Stack.Screen name="project" />
+          <Stack.Screen name="outcome" />
         </Stack.Protected>
       </Stack>
     </>

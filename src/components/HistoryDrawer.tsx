@@ -39,6 +39,7 @@ type Props = {
   onDeleteFolder: (id: string) => void;
   onSearchMessages: (query: string) => Promise<MessageHit[]>;
   onOpenMemory: () => void;
+  onOpenOutcome: () => void;
   onOpenProjects: () => void;
   onOpenSettings: () => void;
 };
@@ -311,6 +312,11 @@ export function HistoryDrawer(p: Props) {
             <Text numberOfLines={1} style={styles.email}>
               {p.email}
             </Text>
+            <PressableScale onPress={p.onOpenOutcome} style={styles.outcomeBtn} label="Open Outcome Engine">
+              <Ionicons name="sparkles" size={17} color={colors.accentInk} />
+              <Text style={styles.footerText}>Outcome Engine</Text>
+              <Ionicons name="chevron-forward" size={15} color={colors.textFaint} />
+            </PressableScale>
             <PressableScale onPress={p.onOpenProjects} style={styles.projectsBtn} label="Open project workspaces">
               <Ionicons name="layers-outline" size={18} color={colors.accentInk} />
               <Text style={styles.footerText}>Projects</Text>
@@ -470,6 +476,7 @@ const make = (t: Theme) =>
     empty: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 14, textAlign: 'center', marginTop: 30 },
     footer: { borderTopWidth: 1, borderTopColor: t.colors.border, paddingTop: 12, gap: 10 },
     email: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 13, paddingHorizontal: 4 },
+    outcomeBtn: { flexDirection: 'row', alignItems: 'center', gap: 9, height: 42, paddingHorizontal: 12, borderRadius: radius.md, backgroundColor: withAlpha(t.colors.accent, 0.10), borderWidth: 1, borderColor: withAlpha(t.colors.accent, 0.25) },
     projectsBtn: { flexDirection: 'row', alignItems: 'center', gap: 9, height: 42, paddingHorizontal: 12, borderRadius: radius.md, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border },
     footerBtns: { flexDirection: 'row', gap: 10 },
     footerBtn: {

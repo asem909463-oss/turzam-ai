@@ -15,6 +15,7 @@ type Props = {
   haptic?: boolean;
   hitSlop?: number;
   label?: string;
+  accessibilityState?: React.ComponentProps<typeof Pressable>['accessibilityState'];
 };
 
 /** Every button in Turzam uses this: springy press-down, light haptic tap. */
@@ -28,6 +29,7 @@ export function PressableScale({
   haptic = true,
   hitSlop = 6,
   label,
+  accessibilityState,
 }: Props) {
   const scale = useSharedValue(1);
   const animated = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -36,6 +38,7 @@ export function PressableScale({
     <AnimatedPressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={accessibilityState}
       disabled={disabled}
       hitSlop={hitSlop}
       onPressIn={() => {

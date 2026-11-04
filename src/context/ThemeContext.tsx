@@ -6,7 +6,7 @@ import { AccentId, ACCENTS, Scheme, Theme, buildTheme } from '../theme';
 const KEY = 'turzam.prefs.v1';
 
 type Prefs = { scheme: Scheme; accent: AccentId; followUps: boolean };
-const DEFAULTS: Prefs = { scheme: 'system', accent: 'cobalt', followUps: true };
+const DEFAULTS: Prefs = { scheme: 'light', accent: 'cobalt', followUps: true };
 
 type Ctx = {
   theme: Theme;
