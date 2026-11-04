@@ -24,7 +24,8 @@ type Props = {
   busy: boolean;
   accent: string;
   placeholder: string;
-  onSend: (text: string, files: PickedFile[]) => void;
+  /** Return false to keep the draft and attachments in the composer. */
+  onSend: (text: string, files: PickedFile[]) => boolean | void;
   onStop: () => void;
   /** Set this to put text into the box (used by the suggestion cards). */
   prefill?: { text: string; nonce: number } | null;
@@ -93,7 +94,7 @@ export function Composer({ busy, accent, placeholder, onSend, onStop, prefill, o
 
   function submit() {
     if (!canSend) return;
-    onSend(text, files);
+    if (onSend(text, files) === false) return;
     setText('');
     setFiles([]);
   }

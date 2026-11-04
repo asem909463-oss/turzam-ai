@@ -9,7 +9,7 @@ export type LegalDocId = 'terms' | 'privacy' | 'cookies';
 export type LegalSection = { heading: string; body: string[] };
 export type LegalDoc = { id: LegalDocId; tab: string; title: string; intro: string; sections: LegalSection[] };
 
-export const LEGAL_UPDATED = '2 November 2026';
+export const LEGAL_UPDATED = '4 November 2026';
 
 const contact = SUPPORT_EMAIL
   ? `Write to us at ${SUPPORT_EMAIL}.`
@@ -97,12 +97,13 @@ export const LEGAL_DOCS: LegalDoc[] = [
           'Your content: chats and messages, files and images you attach, memories you or the app save, folders, project workspaces and your settings (such as personality and custom instructions).',
           'Voice: if you use voice input, the recording is sent for transcription and is not kept by us after the text is returned.',
           'Usage: counts of actions (messages, searches, voice) with times, used only to apply fair-use limits and protect the service.',
+          'AI-processing choice: whether you have agreed to send future prompts to third-party AI providers. This choice is stored on your device and can be changed in Settings.',
         ],
       },
       {
         heading: '2. How we use it',
         body: [
-          'To provide the assistant: answer you, remember what you asked it to remember, keep your history, and sync it across your devices.',
+          'To provide the assistant when you choose to send a request: process it with the selected AI provider, remember what you asked Turzam to remember, keep your history, and sync it across your devices.',
           'To keep the service safe and within limits, fix problems, and meet legal duties.',
           'We do not sell your personal data, and we do not use it for advertising or to track you across other apps.',
         ],
@@ -111,7 +112,7 @@ export const LEGAL_DOCS: LegalDoc[] = [
         heading: '3. Who it is shared with',
         body: [
           'Hosting and database: Supabase stores your account, chats, memories and uploaded files.',
-          'AI providers: your messages, attachments, memories and instructions needed for an answer are sent to the AI model that answers you, such as Google Gemini, and OpenAI or Anthropic when those are connected and chosen. When you use web search, the search is run through Google. Each provider handles data under its own terms and privacy policy.',
+          'AI providers: after you accept the in-app AI-processing notice, the prompt you send, relevant conversation context, attachments, memories and instructions needed for an answer may be sent to the AI model you choose or that is selected for the request, such as Google Gemini, OpenAI or Anthropic when connected. Voice recordings are sent for transcription only when you start voice input. When you use web search, the search is run through Google. Each provider handles data under its own terms and privacy policy.',
           'Sign-in providers: Google or Apple, only if you choose to sign in with them.',
           'We may also disclose data if the law requires it, or to protect people and the service.',
         ],
@@ -155,7 +156,7 @@ export const LEGAL_DOCS: LegalDoc[] = [
         body: [
           'Sign-in session: a secure token so you stay signed in. It is removed when you sign out or delete your account.',
           'Preferences: your theme, accent colour, voice language and similar settings, plus small counters such as when to show the rating reminder.',
-          'These are strictly necessary for the app to work as you expect, so they do not need a separate consent prompt. They stay on your device and are not used for advertising.',
+          'The AI-processing choice is also stored on this device. These preferences are not used for advertising or cross-app tracking.',
         ],
       },
       {

@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -31,12 +31,27 @@ export default function ProjectScreen() {
   const [name, setName] = useState('');
   const [instructions, setInstructions] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [notFound, setNotFound] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const loadedProjectId = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId) {
+      loadedProjectId.current = null;
+      setNotFound(true);
+      setLoading(false);
+      return;
+    }
+    if (loadedProjectId.current !== projectId) {
+      setProject(null);
+      setFiles([]);
+      setChats([]);
+    }
     setLoading(true);
+    setLoadError(false);
+    setNotFound(false);
     try {
       const [nextProject, nextFiles, chatRes] = await Promise.all([
         getProject(projectId),
@@ -44,23 +59,24 @@ export default function ProjectScreen() {
         supabase.from('conversations').select('id,title,updated_at').eq('project_id', projectId).order('updated_at', { ascending: false }).limit(100),
       ]);
       if (!nextProject) {
+        loadedProjectId.current = null;
         setProject(null);
-        toast.show('This project could not be found.', 'error');
-        router.replace('/projects');
+        setNotFound(true);
         return;
       }
       if (chatRes.error) throw new Error(chatRes.error.message);
       setProject(nextProject);
+      loadedProjectId.current = nextProject.id;
       setName(nextProject.name);
       setInstructions(nextProject.instructions ?? '');
       setFiles(nextFiles);
       setChats((chatRes.data ?? []) as ProjectChat[]);
-    } catch (e) {
-      toast.show(e instanceof Error ? e.message : 'Could not load this project.', 'error');
+    } catch {
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
-  }, [projectId, router, toast]);
+  }, [projectId]);
   useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
 
   async function save() {
@@ -143,7 +159,23 @@ export default function ProjectScreen() {
   }
 
   if (!project) {
-    return <View style={{ flex: 1 }}><Aurora /><ScreenHeader title="Project" /><View style={styles.empty}><Text style={styles.emptyTitle}>Project unavailable</Text><PressableScale onPress={() => router.replace('/projects')} style={styles.secondaryButton} label="Back to projects"><Text style={styles.secondaryText}>Back to projects</Text></PressableScale></View></View>;
+    return (
+      <View style={{ flex: 1 }}>
+        <Aurora />
+        <ScreenHeader title="Project" />
+        <View style={styles.empty}>
+          <Ionicons name={loadError ? 'cloud-offline-outline' : 'folder-open-outline'} size={30} color={loadError ? colors.accentInk : colors.textFaint} />
+          <Text style={styles.emptyTitle}>{loadError ? 'Could not load this workspace' : notFound ? 'Project not found' : 'Project unavailable'}</Text>
+          <Text style={styles.errorHelp}>{loadError ? 'Your workspace has not been changed. Check your connection and try again.' : 'This project may have been removed, or the link may be out of date.'}</Text>
+          {loadError ? (
+            <PressableScale disabled={loading} onPress={() => { void refresh(); }} style={[styles.secondaryButton, loading && { opacity: 0.6 }]} label="Try loading the project again">
+              {loading ? <ActivityIndicator color={colors.accentInk} /> : <Text style={styles.secondaryText}>Try again</Text>}
+            </PressableScale>
+          ) : null}
+          <PressableScale onPress={() => router.replace('/projects')} style={styles.secondaryButton} label="Back to projects"><Text style={styles.secondaryText}>Back to projects</Text></PressableScale>
+        </View>
+      </View>
+    );
   }
 
   return (
@@ -153,6 +185,18 @@ export default function ProjectScreen() {
         <PressableScale onPress={removeWorkspace} style={styles.deleteButton} label="Delete project"><Ionicons name="trash-outline" size={19} color={colors.danger} /></PressableScale>
       )} />
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        {loadError ? (
+          <View style={styles.errorBanner}>
+            <Ionicons name="cloud-offline-outline" size={19} color={colors.accentInk} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sectionTitle}>Could not refresh this workspace</Text>
+              <Text style={styles.sectionHint}>Showing what was already loaded. Check your connection and retry.</Text>
+            </View>
+            <PressableScale disabled={loading} onPress={() => { void refresh(); }} label="Retry loading workspace">
+              <Ionicons name="refresh" size={19} color={colors.accentInk} />
+            </PressableScale>
+          </View>
+        ) : null}
         <Animated.View entering={FadeInDown.duration(260)} style={styles.hero}>
           <LinearGradient colors={[...gradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.heroIcon}><Ionicons name="folder-open" size={23} color={colors.onAccent} /></LinearGradient>
           <View style={{ flex: 1 }}>
@@ -232,6 +276,8 @@ const make = (t: Theme) => StyleSheet.create({
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14 },
   emptyTitle: { color: t.colors.text, fontFamily: fonts.uiBold, fontSize: 18 },
+  errorHelp: { maxWidth: 340, color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 14, lineHeight: 21, textAlign: 'center' },
+  errorBanner: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: radius.lg, backgroundColor: withAlpha(t.colors.accent, 0.08), borderWidth: 1, borderColor: withAlpha(t.colors.accent, 0.24) },
   deleteButton: { width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.surface, alignItems: 'center', justifyContent: 'center' },
   hero: { minHeight: 96, flexDirection: 'row', alignItems: 'center', gap: 15, padding: 18, borderRadius: radius.xl, backgroundColor: withAlpha(t.colors.surface, 0.88), borderWidth: 1, borderColor: t.colors.border },
   heroIcon: { width: 54, height: 54, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },

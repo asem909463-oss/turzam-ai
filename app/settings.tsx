@@ -20,6 +20,7 @@ import { useProviders } from '../src/hooks/useProviders';
 import { deleteAllChats } from '../src/lib/chats';
 import { deleteAccountRequest } from '../src/lib/stream';
 import { supabase } from '../src/lib/supabase';
+import { getAiProcessingConsent, setAiProcessingConsent } from '../src/lib/aiConsent';
 import { MODES, PERSONAS } from '../src/modes';
 import { ACCENTS, fonts, radius, Scheme, Theme, withAlpha } from '../src/theme';
 import type { ModelChoice } from '../src/types';
@@ -80,9 +81,10 @@ export default function Settings() {
   const styles = useStyles(make);
   const toast = useToast();
   const { prefs, setScheme, setAccent, setFollowUps } = usePrefs();
-  const { user, profile, updateProfile, signOut } = useAuth();
+  const { user, profile, profileLoading, profileError, updateProfile, signOut } = useAuth();
   const { providers, error: providersError, refresh } = useProviders();
   const [name, setName] = useState(profile?.display_name ?? '');
+  const nameDirty = useRef(false);
   // People who signed up with Google or Apple have no Turzam password.
   const signInMethods = (user?.app_metadata?.providers as string[] | undefined) ?? [];
   const hasPassword = signInMethods.length === 0 || signInMethods.includes('email');
@@ -90,19 +92,81 @@ export default function Settings() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [instructions, setInstructions] = useState(profile?.custom_instructions ?? '');
+  const instructionsDirty = useRef(false);
+  const [aiConsent, setAiConsent] = useState(false);
+  const [aiConsentReady, setAiConsentReady] = useState(false);
+  const [aiConsentSaving, setAiConsentSaving] = useState(false);
+  const [aiConsentLoadError, setAiConsentLoadError] = useState(false);
   const settingsScroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const modelChoicesY = useRef(0);
 
-  async function save(patch: Parameters<typeof updateProfile>[0], okText?: string) {
+  useEffect(() => {
+    if (!profile) return;
+    if (!nameDirty.current) setName(profile.display_name ?? '');
+    if (!instructionsDirty.current) setInstructions(profile.custom_instructions ?? '');
+  }, [profile]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAiConsentReady(false);
+    setAiConsentLoadError(false);
+    if (!user?.id) {
+      setAiConsent(false);
+      setAiConsentReady(true);
+      return () => { cancelled = true; };
+    }
+    getAiProcessingConsent(user.id)
+      .then((accepted) => {
+        if (!cancelled) setAiConsent(accepted);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAiConsent(false);
+          setAiConsentLoadError(true);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setAiConsentReady(true);
+      });
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
+  async function save(patch: Parameters<typeof updateProfile>[0], okText?: string): Promise<boolean> {
     const err = await updateProfile(patch);
-    if (err) toast.show('Could not save. Run the latest supabase/schema.sql (README, step 2).', 'error');
-    else if (okText) toast.show(okText, 'success');
+    if (err) {
+      toast.show(/network|fetch|connection/i.test(err) ? 'Could not save while offline. Check your connection and try again.' : 'Could not save this setting. Your previous value is unchanged.', 'error');
+      return false;
+    }
+    if (okText) toast.show(okText, 'success');
+    return true;
   }
 
   async function saveName() {
+    if (profileLoading || !nameDirty.current) return;
     const clean = name.trim().slice(0, 40);
-    if (clean === (profile?.display_name ?? '')) return;
-    await save({ display_name: clean || null }, 'Name saved');
+    if (clean === (profile?.display_name ?? '')) {
+      nameDirty.current = false;
+      return;
+    }
+    if (await save({ display_name: clean || null }, 'Name saved')) {
+      nameDirty.current = false;
+      setName(clean);
+    }
+  }
+
+  async function changeAiConsent(accepted: boolean) {
+    if (!user?.id || aiConsentSaving) return;
+    setAiConsentSaving(true);
+    try {
+      await setAiProcessingConsent(user.id, accepted);
+      setAiConsent(accepted);
+      setAiConsentLoadError(false);
+      toast.show(accepted ? 'AI sharing is enabled for future requests.' : 'AI sharing is paused for future requests.', 'success');
+    } catch {
+      toast.show('Could not save this privacy choice on your device. Your current choice is unchanged.', 'error');
+    } finally {
+      setAiConsentSaving(false);
+    }
   }
 
   function deleteChats() {
@@ -182,6 +246,21 @@ export default function Settings() {
             <Text style={styles.accessStatusText}>{providers === null ? (providersError ? 'Could not check access' : 'Checking provider access') : connected.length ? 'Provider access is ready' : 'Waiting for a provider connection'}</Text>
           </View>
           <Text style={styles.accessNote}>Subscriptions and in-app checkout aren’t configured in this build. Provider keys stay server-side; nothing here asks you to pay.</Text>
+          <View style={styles.divider} />
+          <View style={styles.switchRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>AI data sharing</Text>
+              <Text style={styles.hint}>Allow future prompts, relevant chat context, and attached files to be processed by the selected AI provider. Turning this off keeps future requests on hold; it does not remove existing chat history.</Text>
+              {aiConsentLoadError ? <Text style={styles.hint}>Could not read the saved choice. Review it again before sending a new AI request.</Text> : null}
+            </View>
+            <Toggle
+              value={aiConsent}
+              label="Allow future prompts to be sent to third-party AI providers"
+              hint="You can change this choice at any time. Earlier chat history is not deleted."
+              disabled={!aiConsentReady || aiConsentSaving || !user?.id}
+              onChange={changeAiConsent}
+            />
+          </View>
           <PressableScale onPress={() => settingsScroll.current?.scrollTo({ y: modelChoicesY.current, animated: true })} style={styles.accessButton} label="Review available AI choices">
             <Text style={styles.accessButtonText}>Review AI choices</Text><Ionicons name="arrow-down" size={15} color={colors.accentInk} />
           </PressableScale>
@@ -191,16 +270,17 @@ export default function Settings() {
           <Text style={styles.label}>Your name</Text>
           <TextInput
             value={name}
-            onChangeText={setName}
-            onBlur={saveName}
-            onSubmitEditing={saveName}
+            editable={!profileLoading && !!profile}
+            onChangeText={(value) => { nameDirty.current = true; setName(value); }}
+            onBlur={() => { void saveName(); }}
+            onSubmitEditing={() => { void saveName(); }}
             placeholder="What should Turzam call you?"
             placeholderTextColor={colors.textFaint}
             selectionColor={colors.accent}
             maxLength={40}
             style={styles.input}
           />
-          <Text style={styles.hint}>{user?.email}</Text>
+          <Text style={styles.hint}>{profileLoading ? 'Loading account settings…' : profileError ? `Could not load profile settings. Check your connection and reopen Settings. ${user?.email ?? ''}` : user?.email}</Text>
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(60).duration(300)} style={styles.card}>
@@ -277,7 +357,7 @@ export default function Settings() {
               <Text style={styles.rowTitle}>Memory</Text>
               <Text style={styles.hint}>Remember lasting facts you share, like your company or goals, to personalise future chats.</Text>
             </View>
-            <Toggle value={profile?.memory_enabled !== false} onChange={(v) => save({ memory_enabled: v })} />
+            <Toggle value={profile?.memory_enabled !== false} label="Use and learn memories" disabled={profileLoading || !profile} onChange={(v) => { void save({ memory_enabled: v }); }} />
           </View>
           <PressableScale onPress={() => router.push('/memory')} style={styles.linkRow} label="Manage memories">
             <Ionicons name="albums-outline" size={19} color={colors.accentInk} />
@@ -289,7 +369,7 @@ export default function Settings() {
               <Text style={styles.rowTitle}>Suggest follow-ups</Text>
               <Text style={styles.hint}>Show tappable ideas for what to ask next. Uses one extra short AI call per answer.</Text>
             </View>
-            <Toggle value={prefs.followUps} onChange={setFollowUps} />
+            <Toggle value={prefs.followUps} label="Suggest follow-up questions" onChange={setFollowUps} />
           </View>
         </Animated.View>
 
@@ -300,7 +380,7 @@ export default function Settings() {
           </Text>
           <TextInput
             value={instructions}
-            onChangeText={setInstructions}
+            onChangeText={(value) => { instructionsDirty.current = true; setInstructions(value); }}
             placeholder="How should Turzam answer you?"
             placeholderTextColor={colors.textFaint}
             selectionColor={colors.accent}
@@ -312,8 +392,12 @@ export default function Settings() {
             <Text style={[styles.hint, { flex: 1 }]}>{instructions.length}/1500</Text>
             <PressableScale
               label="Save instructions"
-              disabled={instructions.trim() === (profile?.custom_instructions ?? '').trim()}
-              onPress={() => save({ custom_instructions: instructions.trim() }, instructions.trim() ? 'Instructions saved' : 'Instructions cleared')}
+              disabled={profileLoading || instructions.trim() === (profile?.custom_instructions ?? '').trim()}
+              onPress={async () => {
+                if (await save({ custom_instructions: instructions.trim() }, instructions.trim() ? 'Instructions saved' : 'Instructions cleared')) {
+                  instructionsDirty.current = false;
+                }
+              }}
               style={[styles.chip, { borderColor: colors.accent, backgroundColor: withAlpha(colors.accent, 0.16), opacity: instructions.trim() === (profile?.custom_instructions ?? '').trim() ? 0.45 : 1 }]}
             >
               <Text style={[styles.chipText, { color: colors.text }]}>Save</Text>
@@ -345,7 +429,7 @@ export default function Settings() {
               <Text style={styles.rowTitle}>Speak answers aloud</Text>
               <Text style={styles.hint}>In voice conversations Turzam reads its answers using your phone's built-in voice.</Text>
             </View>
-            <Toggle value={profile?.voice_reply !== false} onChange={(v) => save({ voice_reply: v })} />
+            <Toggle value={profile?.voice_reply !== false} label="Speak answers aloud" disabled={profileLoading || !profile} onChange={(v) => { void save({ voice_reply: v }); }} />
           </View>
           <Text style={[styles.label, { marginTop: 6 }]}>Voice language</Text>
           <View style={styles.chips}>

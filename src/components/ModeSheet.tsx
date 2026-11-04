@@ -22,11 +22,12 @@ type Props = {
   onSelectPersona: (p: PersonaId) => void;
   searchOn: boolean;
   searchAvailable: boolean;
+  searchStatus?: 'checking' | 'error';
   onToggleSearch: (v: boolean) => void;
   onClose: () => void;
 };
 
-export function ModeSheet({ visible, current, model, providers, onSelect, onSelectModel, persona, onSelectPersona, searchOn, searchAvailable, onToggleSearch, onClose }: Props) {
+export function ModeSheet({ visible, current, model, providers, onSelect, onSelectModel, persona, onSelectPersona, searchOn, searchAvailable, searchStatus, onToggleSearch, onClose }: Props) {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const styles = useStyles(make);
@@ -109,14 +110,17 @@ export function ModeSheet({ visible, current, model, providers, onSelect, onSele
               <View style={{ flex: 1 }}>
                 <Text style={styles.name}>Search the web</Text>
                 <Text style={styles.tag}>
-                  {searchAvailable ? 'Answers with live sources you can open' : 'Needs the Gemini key on the server'}
+                  {searchStatus === 'error' ? 'Could not verify server access. Check your connection.' : searchStatus === 'checking' ? 'Checking server access…' : searchAvailable ? 'Answers with live sources you can open' : 'Needs the Gemini key on the server'}
                 </Text>
               </View>
               <Toggle
                 value={searchOn && searchAvailable}
+                label="Search the web for live sources"
+                hint={searchStatus === 'error' ? 'Could not confirm availability. Check your connection and retry.' : searchStatus === 'checking' ? 'Checking secure provider access.' : searchAvailable ? 'Include live web results in the next answer.' : 'Unavailable until a Gemini key is connected on the server.'}
+                disabled={searchStatus === 'checking'}
                 onChange={(v) => {
                   if (!searchAvailable) {
-                    toast.show('Web search needs the Gemini key on the server.', 'info');
+                    toast.show(searchStatus === 'error' ? 'Could not confirm web search availability. Check your connection and retry.' : 'Web search needs the Gemini key on the server.', 'info');
                     return;
                   }
                   onToggleSearch(v);

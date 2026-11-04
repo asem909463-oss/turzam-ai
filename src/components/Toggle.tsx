@@ -1,15 +1,24 @@
 import React, { useEffect } from 'react';
 import { Pressable, StyleSheet } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import Animated, { interpolateColor, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { interpolateColor, useAnimatedStyle, useReducedMotion, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 
-export function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+type Props = {
+  value: boolean;
+  onChange: (value: boolean) => void;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+};
+
+export function Toggle({ value, onChange, label, hint, disabled = false }: Props) {
   const { colors } = useTheme();
+  const reduceMotion = useReducedMotion();
   const p = useSharedValue(value ? 1 : 0);
   useEffect(() => {
-    p.value = withSpring(value ? 1 : 0, { damping: 14, stiffness: 220 });
-  }, [value, p]);
+    p.value = reduceMotion ? (value ? 1 : 0) : withSpring(value ? 1 : 0, { damping: 14, stiffness: 220 });
+  }, [value, reduceMotion, p]);
 
   const off = colors.surfaceHi;
   const on = colors.accent;
@@ -19,7 +28,10 @@ export function Toggle({ value, onChange }: { value: boolean; onChange: (v: bool
   return (
     <Pressable
       accessibilityRole="switch"
-      accessibilityState={{ checked: value }}
+      accessibilityLabel={label}
+      accessibilityHint={hint}
+      accessibilityState={{ checked: value, disabled }}
+      disabled={disabled}
       hitSlop={8}
       onPress={() => {
         Haptics.selectionAsync().catch(() => {});

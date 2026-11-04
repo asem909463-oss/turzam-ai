@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Speech from 'expo-speech';
@@ -29,10 +29,11 @@ import { useProviders } from '../src/hooks/useProviders';
 import { getMode, getPersona } from '../src/modes';
 import { exportChat, type ExportFormat } from '../src/lib/export';
 import { cleanForSpeech } from '../src/lib/speech';
+import { getAiProcessingConsent, setAiProcessingConsent } from '../src/lib/aiConsent';
 import { dismissReviewPrompt, recordSuccessfulAnswer, snoozeReviewPrompt } from '../src/lib/reviews';
 import { greeting } from '../src/lib/utils';
 import { darken, fonts, radius, Theme, withAlpha } from '../src/theme';
-import type { ChatMessage, ModeId } from '../src/types';
+import type { ChatMessage, ModeId, PickedFile } from '../src/types';
 
 const MODEL_LABEL: Record<string, string> = { auto: 'Auto', gemini: 'Gemini', openai: 'ChatGPT', anthropic: 'Claude' };
 const QUICK_TOOLS: { id: string; label: string; icon: React.ComponentProps<typeof Ionicons>['name']; mode: ModeId; prompt: string; research?: boolean }[] = [
@@ -64,12 +65,16 @@ export default function ChatScreen() {
   const routeParams = useLocalSearchParams<{ projectId?: string; conversationId?: string; outcomePrompt?: string }>();
   const [answer, setAnswer] = useState<{ text: string; nonce: number } | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [aiConsentAllowed, setAiConsentAllowed] = useState(false);
+  const [aiConsentLoading, setAiConsentLoading] = useState(true);
+  const [aiConsentOpen, setAiConsentOpen] = useState(false);
+  const [aiConsentSaving, setAiConsentSaving] = useState(false);
   const handledRouteRef = useRef('');
   const chat = useChat({ onAnswer: (text) => {
     setAnswer({ text, nonce: Date.now() });
     recordSuccessfulAnswer().then((eligible) => { if (eligible) setReviewOpen(true); }).catch(() => {});
   } });
-  const { providers, caps } = useProviders();
+  const { providers, caps, error: providersError } = useProviders();
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [viewImage, setViewImage] = useState<string | null>(null);
 
@@ -84,6 +89,36 @@ export default function ChatScreen() {
     useCallback(() => {
       syncList();
     }, [syncList]),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      setAiConsentLoading(true);
+      if (!user?.id) {
+        setAiConsentAllowed(false);
+        setAiConsentOpen(false);
+        setAiConsentLoading(false);
+        return () => { cancelled = true; };
+      }
+      getAiProcessingConsent(user.id)
+        .then((accepted) => {
+          if (cancelled) return;
+          setAiConsentAllowed(accepted);
+          setAiConsentOpen(!accepted);
+          if (!accepted) setVoiceOpen(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setAiConsentAllowed(false);
+          setAiConsentOpen(true);
+          setVoiceOpen(false);
+        })
+        .finally(() => {
+          if (!cancelled) setAiConsentLoading(false);
+        });
+      return () => { cancelled = true; };
+    }, [user?.id]),
   );
 
   useEffect(() => {
@@ -108,6 +143,50 @@ export default function ChatScreen() {
 
   const mode = getMode(chat.mode);
   const persona = getPersona(chat.persona);
+
+  const sendWithConsent = useCallback((text: string, files: PickedFile[]) => {
+    if (!aiConsentAllowed || aiConsentLoading) {
+      setAiConsentOpen(true);
+      return false;
+    }
+    chat.send(text, files);
+    return true;
+  }, [aiConsentAllowed, aiConsentLoading, chat.send]);
+
+  const regenerateWithConsent = useCallback(() => {
+    if (!aiConsentAllowed || aiConsentLoading) {
+      setAiConsentOpen(true);
+      return;
+    }
+    chat.regenerate();
+  }, [aiConsentAllowed, aiConsentLoading, chat.regenerate]);
+
+  const openVoice = useCallback(() => {
+    if (!aiConsentAllowed || aiConsentLoading) {
+      setAiConsentOpen(true);
+      return;
+    }
+    if (caps?.voiceInput !== true) {
+      toast.show(caps ? 'Voice input needs the Gemini key on the server.' : 'Could not confirm voice availability. Check your connection and try again.', 'info');
+      return;
+    }
+    setVoiceOpen(true);
+  }, [aiConsentAllowed, aiConsentLoading, caps, toast]);
+
+  async function acceptAiConsent() {
+    if (!user?.id || aiConsentSaving) return;
+    setAiConsentSaving(true);
+    try {
+      await setAiProcessingConsent(user.id, true);
+      setAiConsentAllowed(true);
+      setAiConsentOpen(false);
+      toast.show('Choice saved. Tap Send again when you are ready.', 'success');
+    } catch {
+      toast.show('Could not save your privacy choice on this device. Your draft has not been sent.', 'error');
+    } finally {
+      setAiConsentSaving(false);
+    }
+  }
 
   async function doExport(id: string, format: ExportFormat) {
     const title = chat.conversations.find((c) => c.id === id)?.title ?? 'Turzam chat';
@@ -136,10 +215,18 @@ export default function ChatScreen() {
 
   const renderItem = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => (
-      <MessageBubble message={item} isLast={index === 0} busy={chat.busy} accent={mode.color} onRegenerate={chat.regenerate} onSpeak={speak} onOpenImage={setViewImage} />
+      <MessageBubble
+        message={item}
+        isLast={index === 0}
+        busy={chat.busy}
+        accent={mode.color}
+        onRegenerate={item.loadError && chat.activeId ? () => { void chat.openConversation(chat.activeId as string); } : regenerateWithConsent}
+        onSpeak={speak}
+        onOpenImage={setViewImage}
+      />
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chat.busy, chat.regenerate, mode.color, profile?.voice_lang],
+    [chat.busy, regenerateWithConsent, mode.color, profile?.voice_lang],
   );
 
   const greetWords = [{ text: greeting() + (name ? ',' : '') }, ...(name ? [{ text: name, italic: true }] : [])];
@@ -295,7 +382,7 @@ export default function ChatScreen() {
               showsVerticalScrollIndicator={false}
               ListHeaderComponent={
                 !chat.busy && chat.suggestions.length ? (
-                  <FollowUps items={chat.suggestions} accent={mode.color} onPick={(t) => chat.send(t, [])} />
+                  <FollowUps items={chat.suggestions} accent={mode.color} onPick={(t) => { sendWithConsent(t, []); }} />
                 ) : undefined
               }
             />
@@ -308,14 +395,14 @@ export default function ChatScreen() {
             busy={chat.busy}
             accent={mode.color}
             placeholder={`Message Turzam · ${chat.projectId ? 'Project' : mode.name}`}
-            onSend={chat.send}
+            onSend={sendWithConsent}
             onStop={chat.stop}
             prefill={prefill}
-            onVoice={caps?.voiceInput === false ? () => toast.show('Voice input needs the Gemini key on the server.', 'info') : () => setVoiceOpen(true)}
+            onVoice={openVoice}
             searchOn={chat.searchOn && caps?.search === true}
             onToggleSearch={() => {
-              if (caps?.search === false) {
-                toast.show('Web search needs the Gemini key on the server.', 'info');
+              if (caps?.search !== true) {
+                toast.show(providersError ? 'Could not confirm web search availability. Check your connection and retry.' : caps ? 'Web search needs the Gemini key on the server.' : 'Checking secure provider access. Try again in a moment.', 'info');
                 return;
               }
               chat.setSearchOn(!chat.searchOn);
@@ -329,6 +416,8 @@ export default function ChatScreen() {
       <HistoryDrawer
         open={drawerOpen}
         loading={chat.listLoading}
+        historyError={chat.historyError}
+        onRetryHistory={() => { void chat.syncList(); }}
         conversations={chat.conversations}
         folders={chat.folders}
         activeId={chat.activeId}
@@ -412,12 +501,58 @@ export default function ChatScreen() {
         lang={profile?.voice_lang || undefined}
         speakReplies={profile?.voice_reply !== false}
         accent={mode.color}
-        onUtterance={(t) => chat.send(t, [])}
+        onUtterance={(t) => { sendWithConsent(t, []); }}
         onStopGenerating={chat.stop}
         onClose={() => setVoiceOpen(false)}
       />
 
       <ImageViewer uri={viewImage} onClose={() => setViewImage(null)} />
+
+      <Modal transparent animationType="fade" visible={aiConsentOpen} onRequestClose={() => setAiConsentOpen(false)}>
+        <View style={styles.consentBackdrop}>
+          <ScrollView
+            accessibilityViewIsModal
+            style={styles.consentCard}
+            contentContainerStyle={styles.consentContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.consentStar}><StarSpinner size={11} speed={3200} /></View>
+            <Text style={styles.consentEyebrow}>YOUR DATA · YOUR CHOICE</Text>
+            <Text style={styles.consentTitle}>Before your first AI answer</Text>
+            <Text style={styles.consentBody}>
+              When you tap Send, your prompt, relevant chat context, and any attached files are sent to the AI provider selected for your answer (such as Gemini, OpenAI, or Anthropic when connected). The provider processes them under its own privacy policy. Voice audio is sent for transcription only if you start voice input.
+            </Text>
+            <Text style={styles.consentNotice}>
+              Do not include passwords or access tokens. You can turn off future AI sharing in Settings. Your unsent draft and files stay in the composer; nothing is uploaded until you accept and tap Send again.
+            </Text>
+            <PressableScale
+              label="Read the Privacy Policy"
+              style={styles.consentPrivacy}
+              onPress={() => {
+                setAiConsentOpen(false);
+                router.push({ pathname: '/legal', params: { doc: 'privacy' } });
+              }}
+            >
+              <Ionicons name="shield-checkmark-outline" size={17} color={colors.accentInk} />
+              <Text style={styles.consentPrivacyText}>Read the Privacy Policy</Text>
+              <Ionicons name="arrow-forward" size={14} color={colors.accentInk} />
+            </PressableScale>
+            <PressableScale
+              label="Agree to AI processing and continue"
+              disabled={aiConsentSaving}
+              style={[styles.consentPrimary, aiConsentSaving && { opacity: 0.65 }]}
+              onPress={acceptAiConsent}
+            >
+              <Text style={styles.consentPrimaryText}>{aiConsentSaving ? 'Saving choice…' : 'Agree & continue'}</Text>
+              {!aiConsentSaving ? <Ionicons name="arrow-forward" size={17} color={colors.onAccent} /> : null}
+            </PressableScale>
+            <PressableScale label="Not now; keep my draft unsent" style={styles.consentLater} onPress={() => setAiConsentOpen(false)}>
+              <Text style={styles.consentLaterText}>Not now</Text>
+            </PressableScale>
+          </ScrollView>
+        </View>
+      </Modal>
 
       <ReviewPrompt
         visible={reviewOpen}
@@ -447,7 +582,8 @@ export default function ChatScreen() {
           toast.show(p === 'none' ? 'Default personality' : `${getPersona(p).name} personality`, 'info');
         }}
         searchOn={chat.searchOn}
-        searchAvailable={caps?.search !== false}
+        searchAvailable={caps?.search === true}
+        searchStatus={providersError ? 'error' : caps === null ? 'checking' : undefined}
         onToggleSearch={chat.setSearchOn}
         onSelectModel={(m) => {
           chat.setModel(m);
@@ -520,4 +656,18 @@ const make = (t: Theme) =>
     quickTool: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, borderRadius: 17, borderWidth: 1 },
     quickToolText: { fontFamily: fonts.ui, fontSize: 12 },
     disclaimer: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 11.5, textAlign: 'center', marginTop: 6 },
+    consentBackdrop: { flex: 1, backgroundColor: t.colors.overlay, justifyContent: 'center', alignItems: 'center', padding: 20 },
+    consentCard: { width: '100%', maxWidth: 480, maxHeight: '86%', borderRadius: radius.xl, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border, overflow: 'hidden' },
+    consentContent: { padding: 22, gap: 12, alignItems: 'stretch' },
+    consentStar: { width: 46, height: 46, borderRadius: 16, backgroundColor: withAlpha(t.colors.accent, 0.14), alignItems: 'center', justifyContent: 'center' },
+    consentEyebrow: { color: t.colors.accentInk, fontFamily: fonts.uiBold, fontSize: 10, letterSpacing: 1.2 },
+    consentTitle: { color: t.colors.text, fontFamily: fonts.display, fontSize: 28, lineHeight: 34 },
+    consentBody: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 14, lineHeight: 21 },
+    consentNotice: { color: t.colors.text, fontFamily: fonts.ui, fontSize: 12.5, lineHeight: 19, padding: 12, borderRadius: radius.md, backgroundColor: withAlpha(t.colors.accent, 0.08), borderWidth: 1, borderColor: withAlpha(t.colors.accent, 0.18) },
+    consentPrivacy: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 11, borderRadius: radius.md, borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.bgElevated },
+    consentPrivacyText: { flex: 1, color: t.colors.accentInk, fontFamily: fonts.uiBold, fontSize: 13 },
+    consentPrimary: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 14, borderRadius: radius.md, backgroundColor: t.colors.accent },
+    consentPrimaryText: { color: t.colors.onAccent, fontFamily: fonts.uiBold, fontSize: 15 },
+    consentLater: { minHeight: 40, alignItems: 'center', justifyContent: 'center' },
+    consentLaterText: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 13 },
   });

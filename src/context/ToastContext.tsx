@@ -47,8 +47,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             layout={LinearTransition}
             style={[styles.toast, { borderColor: withAlpha(tint(t.kind), 0.55) }]}
           >
-            <Ionicons name={icon(t.kind)} size={20} color={tint(t.kind)} />
-            <Text style={styles.text}>{t.text}</Text>
+            <Ionicons name={icon(t.kind)} size={20} color={tint(t.kind)} accessible={false} />
+            <Text
+              accessibilityRole={t.kind === 'error' ? 'alert' : 'text'}
+              accessibilityLiveRegion="polite"
+              style={styles.text}
+            >
+              {t.text}
+            </Text>
           </Animated.View>
         ))}
       </View>

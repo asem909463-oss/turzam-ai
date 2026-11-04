@@ -52,6 +52,8 @@ export type ChatMessage = {
   /** Shown in the thinking indicator while files are uploaded / read. */
   working?: string;
   error?: string;
+  /** A fetch failure for an existing conversation, not a failed AI answer. */
+  loadError?: boolean;
 };
 
 export type Profile = {

@@ -116,7 +116,7 @@ function BubbleBase({ message, isLast, busy, accent, onRegenerate, onSpeak, onOp
               </PressableScale>
             ) : null}
             {isLast && !busy ? (
-              <PressableScale label="Regenerate answer" style={styles.actionBtn} onPress={onRegenerate}>
+              <PressableScale label={message.loadError ? 'Retry loading this chat' : 'Regenerate answer'} style={styles.actionBtn} onPress={onRegenerate}>
                 <Ionicons name="refresh" size={16} color={colors.textDim} />
               </PressableScale>
             ) : null}

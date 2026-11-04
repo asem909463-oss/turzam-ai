@@ -12,6 +12,8 @@ type AuthState = {
   user: User | null;
   profile: Profile | null;
   loading: boolean;
+  profileLoading: boolean;
+  profileError: string | null;
   signIn: (email: string, password: string) => Promise<string | null>;
   /** Returns { error } or { needsConfirm: true } when the email must be confirmed first. */
   signUp: (email: string, password: string) => Promise<{ error?: string; needsConfirm?: boolean }>;
@@ -28,14 +30,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
+    let cancelled = false;
+    let authEventReceived = false;
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+      authEventReceived = true;
+      if (cancelled) return;
+      setSession(next);
       setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
-    return () => sub.subscription.unsubscribe();
+    void supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (cancelled || authEventReceived) return;
+        setSession(error ? null : data.session);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (cancelled || authEventReceived) return;
+        setSession(null);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      sub.subscription.unsubscribe();
+    };
   }, []);
 
   const userId = session?.user.id;
@@ -43,16 +65,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!userId) {
       setProfile(null);
+      setProfileError(null);
+      setProfileLoading(false);
       return;
     }
     let cancelled = false;
+    setProfile(null);
+    setProfileError(null);
+    setProfileLoading(true);
     (async () => {
-      let { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
-      if (!data) {
-        const res = await supabase.from('profiles').upsert({ id: userId }).select('*').single();
-        data = res.data;
+      try {
+        const first = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+        if (first.error) throw first.error;
+        let data = first.data;
+        if (!data) {
+          const fallback = await supabase.from('profiles').upsert({ id: userId }).select('*').single();
+          if (fallback.error) throw fallback.error;
+          data = fallback.data;
+        }
+        if (!data) throw new Error('Profile data is unavailable.');
+        if (!cancelled) {
+          setProfile(data as Profile);
+          setProfileError(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setProfile(null);
+          setProfileError(error instanceof Error ? error.message : 'Could not load profile settings.');
+        }
+      } finally {
+        if (!cancelled) setProfileLoading(false);
       }
-      if (!cancelled && data) setProfile(data as Profile);
     })();
     return () => {
       cancelled = true;
@@ -102,9 +145,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const updateProfile = useCallback(
     async (patch: Partial<Omit<Profile, 'id'>>) => {
       if (!userId) return 'Not signed in.';
-      setProfile((p) => (p ? { ...p, ...patch } : p));
-      const { error } = await supabase.from('profiles').update(patch).eq('id', userId);
-      return error ? error.message : null;
+      const { data, error } = await supabase.from('profiles').update(patch).eq('id', userId).select('id').maybeSingle();
+      if (error) return error.message;
+      if (!data) return 'Your profile could not be found. Refresh your settings and try again.';
+      setProfile((current) => (current ? { ...current, ...patch } : current));
+      setProfileError(null);
+      return null;
     },
     [userId],
   );
@@ -115,13 +161,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user: session?.user ?? null,
       profile,
       loading,
+      profileLoading,
+      profileError,
       signIn,
       signUp,
       signInWithProvider,
       signOut,
       updateProfile,
     }),
-    [session, profile, loading, signIn, signUp, signInWithProvider, signOut, updateProfile],
+    [session, profile, loading, profileLoading, profileError, signIn, signUp, signInWithProvider, signOut, updateProfile],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

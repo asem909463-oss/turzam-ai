@@ -21,6 +21,8 @@ export type MessageHit = { conversationId: string; snippet: string };
 type Props = {
   open: boolean;
   loading: boolean;
+  historyError: boolean;
+  onRetryHistory: () => void;
   conversations: Conversation[];
   folders: Folder[];
   activeId: string | null;
@@ -229,16 +231,29 @@ export function HistoryDrawer(p: Props) {
               keyboardShouldPersistTaps="handled"
               ListFooterComponent={searching ? <Skeleton height={34} radius={10} style={{ marginTop: 8 }} /> : undefined}
               ListEmptyComponent={
-                searching ? undefined : (
+                searching || p.historyError ? undefined : (
                   <Text style={styles.empty}>{query ? 'Nothing found.' : 'Your chats will appear here.'}</Text>
                 )
               }
               ListHeaderComponent={
-                !query ? (
-                  <PressableScale onPress={() => setFolderName({ id: null, initial: '' })} haptic={false} style={styles.addFolder} label="New folder">
-                    <Ionicons name="folder-open-outline" size={16} color={colors.textDim} />
-                    <Text style={styles.addFolderText}>New folder</Text>
-                  </PressableScale>
+                p.historyError || !query ? (
+                  <View>
+                    {p.historyError ? (
+                      <View style={styles.loadError}>
+                        <Text style={styles.loadErrorText}>{p.conversations.length ? 'Could not refresh. Showing saved chats.' : 'Could not load your chats.'}</Text>
+                        <PressableScale disabled={p.loading} onPress={p.onRetryHistory} haptic={false} style={styles.retryHistory} label="Retry loading chat history">
+                          <Ionicons name="refresh" size={15} color={colors.accentInk} />
+                          <Text style={styles.retryHistoryText}>Retry</Text>
+                        </PressableScale>
+                      </View>
+                    ) : null}
+                    {!query ? (
+                      <PressableScale onPress={() => setFolderName({ id: null, initial: '' })} haptic={false} style={styles.addFolder} label="New folder">
+                        <Ionicons name="folder-open-outline" size={16} color={colors.textDim} />
+                        <Text style={styles.addFolderText}>New folder</Text>
+                      </PressableScale>
+                    ) : null}
+                  </View>
                 ) : undefined
               }
               renderItem={({ item, index }) => {
@@ -474,6 +489,10 @@ const make = (t: Theme) =>
     itemText: { color: t.colors.textDim, fontFamily: fonts.ui, fontSize: 15 },
     snippet: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 12.5, marginTop: 2 },
     empty: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 14, textAlign: 'center', marginTop: 30 },
+    loadError: { gap: 8, padding: 11, marginTop: 6, borderRadius: radius.md, backgroundColor: withAlpha(t.colors.accent, 0.08), borderWidth: 1, borderColor: withAlpha(t.colors.accent, 0.22) },
+    loadErrorText: { color: t.colors.textDim, fontFamily: fonts.uiRegular, fontSize: 12.5, lineHeight: 18 },
+    retryHistory: { minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingHorizontal: 9, borderRadius: radius.md, backgroundColor: t.colors.surface },
+    retryHistoryText: { color: t.colors.accentInk, fontFamily: fonts.uiBold, fontSize: 12 },
     footer: { borderTopWidth: 1, borderTopColor: t.colors.border, paddingTop: 12, gap: 10 },
     email: { color: t.colors.textFaint, fontFamily: fonts.uiRegular, fontSize: 13, paddingHorizontal: 4 },
     outcomeBtn: { flexDirection: 'row', alignItems: 'center', gap: 9, height: 42, paddingHorizontal: 12, borderRadius: radius.md, backgroundColor: withAlpha(t.colors.accent, 0.10), borderWidth: 1, borderColor: withAlpha(t.colors.accent, 0.25) },

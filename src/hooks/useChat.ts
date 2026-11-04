@@ -51,6 +51,8 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [listLoading, setListLoading] = useState(true);
+  const [conversationListError, setConversationListError] = useState(false);
+  const [folderListError, setFolderListError] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [mode, setModeState] = useState<ModeId>('founder');
@@ -105,27 +107,34 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
     }
   }, [defaultMode, defaultModel, defaultPersona]);
 
-  const loadConversations = useCallback(async (): Promise<Conversation[]> => {
-    const { data } = await supabase
+  const loadConversations = useCallback(async (): Promise<Conversation[] | null> => {
+    setListLoading(true);
+    const { data, error } = await supabase
       .from('conversations')
       .select('id,title,mode,model,persona,pinned,archived,folder_id,project_id,updated_at')
       .order('updated_at', { ascending: false })
       .limit(300);
+    if (error) {
+      setConversationListError(true);
+      setListLoading(false);
+      return null;
+    }
     const list = (data ?? []) as Conversation[];
-    if (data) setConversations(list);
+    setConversationListError(false);
+    setConversations(list);
     setListLoading(false);
     return list;
   }, []);
 
   const loadFolders = useCallback(async () => {
-    const { data } = await supabase.from('folders').select('id,name,color').order('created_at', { ascending: true });
-    if (data) setFolders(data as Folder[]);
+    const { data, error } = await supabase.from('folders').select('id,name,color').order('created_at', { ascending: true });
+    if (error) {
+      setFolderListError(true);
+      return;
+    }
+    setFolderListError(false);
+    setFolders((data ?? []) as Folder[]);
   }, []);
-
-  useEffect(() => {
-    loadConversations();
-    loadFolders();
-  }, [loadConversations, loadFolders]);
 
   const patchMessage = useCallback((id: string, patch: Partial<ChatMessage>) => {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
@@ -156,9 +165,14 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
 
   /** Refreshes the list; if the open chat was deleted elsewhere (Settings), leaves it. */
   const syncList = useCallback(async () => {
-    const list = await loadConversations();
+    const [list] = await Promise.all([loadConversations(), loadFolders()]);
+    if (!list) return;
     if (activeRef.current && !list.some((c) => c.id === activeRef.current)) newChat();
-  }, [loadConversations, newChat]);
+  }, [loadConversations, loadFolders, newChat]);
+
+  useEffect(() => {
+    void syncList();
+  }, [syncList]);
 
   const setMode = useCallback(async (m: ModeId) => {
     setModeState(m);
@@ -203,7 +217,9 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
     setSuggestions([]);
     setLoadingConv(true);
     try {
-      const { data: convo } = await supabase.from('conversations').select('mode,model,persona,project_id').eq('id', id).maybeSingle();
+      const { data: convo, error: convoError } = await supabase.from('conversations').select('mode,model,persona,project_id').eq('id', id).maybeSingle();
+      if (convoError) throw convoError;
+      if (!convo) throw new Error('This conversation is unavailable.');
       projectRef.current = convo?.project_id ?? null;
       setProjectIdState(projectRef.current);
       if (convo?.mode) {
@@ -253,7 +269,9 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
       );
     } catch (e) {
       if (activeRef.current === id) {
-        setMessages([{ id: uuid(), role: 'model', content: '', error: `Could not load this chat. ${friendly(e)}` }]);
+        const detail = friendly(e);
+        const network = /network request failed|failed to fetch|network error/i.test(detail);
+        setMessages([{ id: uuid(), role: 'model', content: '', error: network ? 'Could not reach the server. Check your connection and retry.' : 'This chat could not be loaded. Refresh history or try again.', loadError: true }]);
       }
     } finally {
       if (activeRef.current === id) setLoadingConv(false);
@@ -591,6 +609,7 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
   return {
     conversations,
     listLoading,
+    historyError: conversationListError || folderListError,
     activeId,
     messages,
     mode,

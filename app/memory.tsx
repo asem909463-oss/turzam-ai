@@ -20,12 +20,13 @@ export default function MemoryScreen() {
   const { colors } = useTheme();
   const styles = useStyles(make);
   const toast = useToast();
-  const { profile, updateProfile } = useAuth();
+  const { profile, profileLoading, updateProfile } = useAuth();
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [items, setItems] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyClear, setBusyClear] = useState(false);
+  const [savingMemory, setSavingMemory] = useState(false);
   const [draft, setDraft] = useState('');
 
   const load = useCallback(async () => {
@@ -71,38 +72,50 @@ export default function MemoryScreen() {
 
   async function togglePin(m: Memory) {
     const pinned = !m.pinned;
+    const { error } = await supabase.from('memories').update({ pinned }).eq('id', m.id);
+    if (error) {
+      toast.show('Could not update that memory', 'error');
+      return;
+    }
     setItems((prev) => {
       const next = prev.map((x) => (x.id === m.id ? { ...x, pinned } : x));
       return [...next.filter((x) => x.pinned), ...next.filter((x) => !x.pinned)];
     });
-    const { error } = await supabase.from('memories').update({ pinned }).eq('id', m.id);
-    if (error) {
-      toast.show('Could not update that memory', 'error');
-      load();
-    } else toast.show(pinned ? 'Pinned: Turzam keeps this in mind first' : 'Unpinned', 'info');
+    toast.show(pinned ? 'Pinned: Turzam keeps this in mind first' : 'Unpinned', 'info');
   }
 
   async function saveEdit() {
     if (!editing) return;
     const text = editing.text.trim().slice(0, 280);
     const id = editing.id;
-    setEditing(null);
     if (!text) return;
-    setItems((prev) => prev.map((x) => (x.id === id ? { ...x, content: text } : x)));
     const { error } = await supabase.from('memories').update({ content: text }).eq('id', id);
     if (error) {
       toast.show('Could not save the change', 'error');
-      load();
+      return;
     }
+    setItems((prev) => prev.map((x) => (x.id === id ? { ...x, content: text } : x)));
+    setEditing(null);
+    toast.show('Memory updated', 'success');
   }
 
   async function remove(id: string) {
-    setItems((prev) => prev.filter((m) => m.id !== id));
     const { error } = await supabase.from('memories').delete().eq('id', id);
     if (error) {
       toast.show('Could not delete that memory', 'error');
-      load();
-    } else toast.show('Forgotten', 'info');
+      return;
+    }
+    setItems((prev) => prev.filter((m) => m.id !== id));
+    toast.show('Forgotten', 'info');
+  }
+
+  async function setMemoryUsage(value: boolean) {
+    if (!profile || savingMemory) return;
+    setSavingMemory(true);
+    const error = await updateProfile({ memory_enabled: value });
+    setSavingMemory(false);
+    if (error) toast.show('Could not save your memory setting. Your current setting is unchanged.', 'error');
+    else toast.show(value ? 'Memory is on' : 'Memory is off', 'success');
   }
 
   function clearAll() {
@@ -148,9 +161,15 @@ export default function MemoryScreen() {
         <View style={styles.pauseRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.itemText}>Use and learn memories</Text>
-            <Text style={styles.pauseHint}>{profile?.memory_enabled !== false ? 'On: Turzam uses these and picks up new facts.' : 'Off: nothing is used or saved.'}</Text>
+            <Text style={styles.pauseHint}>{profileLoading ? 'Checking your memory setting…' : profile?.memory_enabled !== false ? 'On: Turzam uses these and picks up new facts.' : 'Off: nothing is used or saved.'}</Text>
           </View>
-          <Toggle value={profile?.memory_enabled !== false} onChange={(v) => updateProfile({ memory_enabled: v })} />
+          <Toggle
+            value={profile?.memory_enabled !== false}
+            label="Use and learn memories"
+            hint="Controls whether Turzam uses saved memories in future chats."
+            disabled={!profile || profileLoading || savingMemory}
+            onChange={setMemoryUsage}
+          />
         </View>
 
         <View style={styles.addRow}>
