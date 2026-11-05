@@ -16,10 +16,27 @@ export function useProviders() {
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
       if (!token) return;
-      const res = await callFunction<{ providers: ProviderInfo[]; search?: boolean; voiceInput?: boolean }>(token, { action: 'models' });
+      const res = await callFunction<{
+        providers: ProviderInfo[];
+        search?: boolean;
+        voiceInput?: boolean;
+        maintenance?: string | null;
+        features?: { attachments?: boolean; projects?: boolean; memory?: boolean; search?: boolean; voiceInput?: boolean };
+      }>(token, { action: 'models' });
       cache = res.providers;
       setProviders(res.providers);
-      capCache = { search: res.search === true, voiceInput: res.voiceInput === true };
+      capCache = {
+        search: res.search === true,
+        voiceInput: res.voiceInput === true,
+        maintenance: res.maintenance ?? null,
+        features: {
+          attachments: res.features?.attachments !== false,
+          projects: res.features?.projects !== false,
+          memory: res.features?.memory !== false,
+          search: res.features?.search !== false,
+          voiceInput: res.features?.voiceInput !== false,
+        },
+      };
       setCaps(capCache);
       setError(null);
     } catch (e) {

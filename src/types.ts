@@ -51,6 +51,8 @@ export type ChatMessage = {
   streaming?: boolean;
   /** Shown in the thinking indicator while files are uploaded / read. */
   working?: string;
+  /** Local-only UI entry; never persisted or included in AI history. */
+  ephemeral?: boolean;
   error?: string;
   /** A fetch failure for an existing conversation, not a failed AI answer. */
   loadError?: boolean;
@@ -75,7 +77,12 @@ export type Memory = {
   created_at: string;
 };
 
-export type Capabilities = { search: boolean; voiceInput: boolean };
+export type Capabilities = {
+  search: boolean;
+  voiceInput: boolean;
+  maintenance?: string | null;
+  features?: { attachments: boolean; projects: boolean; memory: boolean; search: boolean; voiceInput: boolean };
+};
 
 export type ProviderInfo = {
   id: ProviderId;

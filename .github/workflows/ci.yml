@@ -39,7 +39,7 @@ jobs:
       - name: Unit tests (limits, validation, Gemini settings)
         run: npm run test:edge
       - name: Type-check the functions
-        run: deno check --frozen supabase/functions/chat/index.ts supabase/functions/delete-account/index.ts
+        run: deno check --frozen supabase/functions/chat/index.ts supabase/functions/delete-account/index.ts supabase/functions/founder-admin/index.ts
       - name: Lint the functions
         run: deno lint supabase/functions
 
