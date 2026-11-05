@@ -85,8 +85,6 @@ create table storage.objects (id uuid primary key default gen_random_uuid(), buc
 create function storage.foldername(name text) returns text[] language sql immutable as $$ select string_to_array(name, '/') $$;
 alter table public.folders enable row level security;
 alter table public.conversations enable row level security;
-grant select, insert, update, delete on public.folders, public.conversations to authenticated;
-grant select, insert, update, delete on public.projects to authenticated;
 SQL
 
 # Seed a legacy cross-user folder reference so the production RLS block's backfill is exercised.
@@ -112,6 +110,9 @@ awk '
   in_block { print }
 ' "$SCHEMA_FILE" | run >/dev/null
 
+# Apply the canonical table ACL block rather than granting test-fixture privileges by hand.
+sed -n '/^-- Table ACLs are separate from RLS/,/^-- ---------- Row Level Security/ { /^-- ---------- Row Level Security/d; p; }' "$SCHEMA_FILE" | run >/dev/null
+
 # Load quota and recovery-table DDL, excluding the later founder-admin schema and its dependencies.
 sed -n '/^-- ---------- Usage limits/,$p' "$SCHEMA_FILE" | sed '/^-- ---------- Founder Admin Panel/,$d' | run >/dev/null
 # Apply only the founder-admin quota override, which adds admin_auth, without loading other admin DDL.
@@ -121,6 +122,12 @@ fail=0
 expect() { # name, expected, actual
   if [ "$2" = "$3" ]; then echo "PASS  $1 (allowed $3, expected $2)"; else echo "FAIL  $1 (allowed $3, expected $2)"; fail=1; fi
 }
+
+echo "-- application table ACLs and row policies both support normal signed-in use"
+core_grants=$(run -c "select concat(bool_and(has_table_privilege('authenticated', c.oid, 'SELECT') and has_table_privilege('authenticated', c.oid, 'INSERT') and has_table_privilege('authenticated', c.oid, 'UPDATE') and has_table_privilege('authenticated', c.oid, 'DELETE'))::text, '|', bool_and(has_table_privilege('service_role', c.oid, 'SELECT') and has_table_privilege('service_role', c.oid, 'INSERT') and has_table_privilege('service_role', c.oid, 'UPDATE') and has_table_privilege('service_role', c.oid, 'DELETE'))::text, '|', bool_and(not has_table_privilege('anon', c.oid, 'SELECT') and not has_table_privilege('anon', c.oid, 'INSERT') and not has_table_privilege('anon', c.oid, 'UPDATE') and not has_table_privilege('anon', c.oid, 'DELETE') and not has_table_privilege('anon', c.oid, 'TRUNCATE') and not has_table_privilege('anon', c.oid, 'TRIGGER'))) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname in ('profiles','conversations','messages','memories','folders','projects','project_files')")
+expect "authenticated CRUD and trusted service access, with anon denied" "t|t|t" "$core_grants"
+usage_grants=$(run -c "select concat(has_table_privilege('service_role','public.usage_events','SELECT'),'|',has_table_privilege('authenticated','public.usage_events','SELECT'),'|',has_table_privilege('anon','public.usage_events','SELECT'))")
+expect "only the trusted server role can read usage analytics" "t|f|f" "$usage_grants"
 
 echo "-- conversation folder links stay within the authenticated user's ownership"
 repaired=$(run -c "select coalesce(folder_id::text,'null') from public.conversations where id='$RLS_CHAT'")

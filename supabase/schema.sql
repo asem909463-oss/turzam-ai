@@ -100,8 +100,15 @@ create table if not exists public.project_files (
 alter table public.conversations add column if not exists project_id uuid references public.projects(id) on delete set null;
 create index if not exists conversations_project_idx on public.conversations(user_id, project_id, updated_at desc);
 create index if not exists project_files_project_idx on public.project_files(project_id, created_at desc);
-
-
+-- Table ACLs are separate from RLS. Grant only CRUD on user-owned tables to signed-in users;
+-- the owner policies below still scope every read/write to auth.uid(). No public/anon or
+-- authenticated TRUNCATE/REFERENCES/TRIGGER privilege is needed by the app.
+revoke all on table public.profiles, public.conversations, public.messages, public.memories,
+  public.folders, public.projects, public.project_files from public, anon, authenticated, service_role;
+grant select, insert, update, delete on table public.profiles, public.conversations, public.messages,
+  public.memories, public.folders, public.projects, public.project_files to authenticated;
+grant all privileges on table public.profiles, public.conversations, public.messages, public.memories,
+  public.folders, public.projects, public.project_files to service_role;
 -- ---------- Row Level Security: every user sees ONLY their own rows ----------
 
 alter table public.profiles enable row level security;
@@ -230,6 +237,9 @@ create index if not exists usage_events_lookup on public.usage_events (user_id, 
 create index if not exists usage_events_global on public.usage_events (kind, created_at desc);
 alter table public.usage_events enable row level security;
 revoke all on public.usage_events from public, anon, authenticated, service_role;
+-- Edge Functions need to read aggregate usage for the admin dashboard; writes remain inside
+-- the SECURITY DEFINER consume_quota RPC and no API role can read this table.
+grant select on public.usage_events to service_role;
 
 -- Returns {"ok": true} and records the call, or {"ok": false, "reason": "minute"|"day", "retry_after": seconds}.
 -- The Edge Function supplies limits from server secrets. Execution is service_role-only; the public API roles
