@@ -22,6 +22,7 @@ do $$ begin
   if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
   if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
 end $$;
+alter role service_role bypassrls;
 create schema auth;
 create table auth.users (
   id uuid primary key,
@@ -36,6 +37,36 @@ create function auth.uid() returns uuid language sql stable as
 grant usage on schema auth to anon, authenticated;
 grant execute on function auth.uid() to anon, authenticated;
 grant usage on schema public to anon, authenticated;
+create table public.admin_account_control (
+  user_id uuid primary key references auth.users(id),
+  account_status text not null default 'active'
+);
+create table public.admin_settings (key text primary key, value jsonb not null);
+create or replace function public.current_account_is_active()
+returns boolean
+language sql stable security definer
+set search_path = pg_catalog, public, auth
+as $$
+  select auth.uid() is not null and not exists (
+    select 1 from public.admin_account_control c
+    where c.user_id = auth.uid() and c.account_status = 'suspended'
+  );
+$$;
+revoke all on function public.current_account_is_active() from public, anon;
+grant execute on function public.current_account_is_active() to authenticated, service_role;
+create or replace function public.current_feature_enabled(p_feature text)
+returns boolean
+language sql stable security definer
+set search_path = pg_catalog, public, auth
+as $$
+  select coalesce(
+    (select (s.value #>> array['features', p_feature])::boolean
+     from public.admin_settings s where s.key = 'runtime'),
+    true
+  );
+$$;
+revoke all on function public.current_feature_enabled(text) from public, anon;
+grant execute on function public.current_feature_enabled(text) to authenticated, service_role;
 create table public.folders (id uuid primary key, user_id uuid not null references auth.users(id), name text not null);
 create table public.projects (id uuid primary key, user_id uuid not null references auth.users(id));
 create table public.conversations (
@@ -66,13 +97,25 @@ RLS_FOLDER_B="10000000-0000-0000-0000-0000000000b1"
 RLS_CHAT="20000000-0000-0000-0000-0000000000a1"
 run -c "insert into auth.users values ('$RLS_USER_A'), ('$RLS_USER_B'); insert into public.folders values ('$RLS_FOLDER_A','$RLS_USER_A','A'), ('$RLS_FOLDER_B','$RLS_USER_B','B'); insert into public.conversations values ('$RLS_CHAT','$RLS_USER_A','$RLS_FOLDER_B',null)" >/dev/null
 
-# Apply the exact legacy conversation/folder policy block from schema.sql (first occurrence only), stopping before the messages policy.
-# The Founder Admin section later re-creates these policies; the usage-limit load below installs that final version.
+# Apply the legacy conversation/folder blocks first to test the cross-user-link backfill, then apply
+# the final helper-backed policies that match the live account-status and feature checks.
 sed -n '/^drop policy if exists "conversations own" on public.conversations;/,/^drop policy if exists "messages own" on public.messages;/{ /^drop policy if exists "messages own" on public.messages;/q; p; }' "$SCHEMA_FILE" | run >/dev/null
 sed -n '/^drop policy if exists "folders own" on public.folders;/,/^drop policy if exists "projects own" on public.projects;/{ /^drop policy if exists "projects own" on public.projects;/q; p; }' "$SCHEMA_FILE" | run >/dev/null
+awk '
+  /^drop policy if exists "conversations own" on public.conversations;/ { occurrence++; if (occurrence == 2) in_block = 1 }
+  in_block && /^drop policy if exists "messages own" on public.messages;/ { exit }
+  in_block { print }
+' "$SCHEMA_FILE" | run >/dev/null
+awk '
+  /^drop policy if exists "folders own" on public.folders;/ { occurrence++; if (occurrence == 2) in_block = 1 }
+  in_block && /^drop policy if exists "projects own" on public.projects;/ { exit }
+  in_block { print }
+' "$SCHEMA_FILE" | run >/dev/null
 
-# Load only the usage-limit section of schema.sql.
-sed -n '/^-- ---------- Usage limits/,$p' "$SCHEMA_FILE" | run >/dev/null
+# Load quota and recovery-table DDL, excluding the later founder-admin schema and its dependencies.
+sed -n '/^-- ---------- Usage limits/,$p' "$SCHEMA_FILE" | sed '/^-- ---------- Founder Admin Panel/,$d' | run >/dev/null
+# Apply only the founder-admin quota override, which adds admin_auth, without loading other admin DDL.
+sed -n '/^-- Extend the accepted internal quota kind/,/^-- Internal helpers:/{ /^-- Internal helpers:/d; p; }' "$SCHEMA_FILE" | run >/dev/null
 
 fail=0
 expect() { # name, expected, actual
@@ -109,6 +152,27 @@ for role in anon authenticated; do
 done
 after=$(run -c "select count(*) from public.usage_events")
 expect "denied direct calls cannot write usage records" "$before" "$after"
+
+echo "-- account deletion recovery state survives failures but stays server-only"
+deletion_privileges=$(run -c "select concat(has_table_privilege('service_role','public.account_deletion_jobs','SELECT'),'|',has_table_privilege('service_role','public.account_deletion_jobs','INSERT'),'|',has_table_privilege('service_role','public.account_deletion_jobs','UPDATE'),'|',has_table_privilege('service_role','public.account_deletion_jobs','DELETE'),'|',has_table_privilege('authenticated','public.account_deletion_jobs','SELECT'),'|',has_table_privilege('authenticated','public.account_deletion_jobs','INSERT'),'|',has_table_privilege('anon','public.account_deletion_jobs','SELECT'),'|',has_table_privilege('anon','public.account_deletion_jobs','INSERT'))")
+expect "only trusted server role has recovery-table access" "t|t|t|t|f|f|f|f" "$deletion_privileges"
+for role in anon authenticated; do
+  if run -c "set role $role; select count(*) from public.account_deletion_jobs" >/dev/null 2>&1; then
+    echo "FAIL  $role cannot read deletion recovery state (query unexpectedly succeeded)"
+    fail=1
+  else
+    echo "PASS  $role cannot read deletion recovery state"
+  fi
+done
+run -c "set role service_role; insert into public.account_deletion_jobs(user_id,stage,last_error) values ('$TEST_UID','database','auth_delete_failed') on conflict (user_id) do update set stage='database',last_error='auth_delete_failed';" >/dev/null
+pending=$(run -c "select stage || '|' || last_error from public.account_deletion_jobs where user_id='$TEST_UID'")
+expect "failed database deletion remains recorded for retry" "database|auth_delete_failed" "$pending"
+still_active=$(run -c "select exists(select 1 from auth.users where id='$TEST_UID')")
+expect "failed cleanup leaves the account available for recovery" "t" "$still_active"
+run -c "set role service_role; update public.account_deletion_jobs set stage='storage',last_error=null,updated_at=now() where user_id='$TEST_UID'" >/dev/null
+retry_stage=$(run -c "select stage || '|' || coalesce(last_error,'clear') from public.account_deletion_jobs where user_id='$TEST_UID'")
+expect "a retry can resume the pending deletion cleanly" "storage|clear" "$retry_stage"
+run -c "set role service_role; delete from public.account_deletion_jobs where user_id='$TEST_UID'" >/dev/null
 
 # Concurrent callers: every caller connects first and then waits at a "starting gate" (an advisory lock held
 # by a helper session). When all of them are waiting the gate opens, so they hit consume_quota at the same instant.

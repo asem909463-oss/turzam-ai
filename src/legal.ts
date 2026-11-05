@@ -1,7 +1,7 @@
 // Turzam AI legal texts shown in the app (Settings > Legal, and linked from the sign-in screen).
 //
 // IMPORTANT FOR THE APP OWNER: this is a plain-language template written to match what the app really does.
-// Have a lawyer review it, and fill in the owner/contact details, before you publish to the app stores.
+// Have a lawyer review it before publication; add contact or address details only after they are verified.
 // Update LEGAL_UPDATED whenever the text changes.
 import { SUPPORT_EMAIL } from './lib/config';
 
@@ -9,7 +9,7 @@ export type LegalDocId = 'terms' | 'privacy' | 'cookies';
 export type LegalSection = { heading: string; body: string[] };
 export type LegalDoc = { id: LegalDocId; tab: string; title: string; intro: string; sections: LegalSection[] };
 
-export const LEGAL_UPDATED = '4 November 2026';
+export const LEGAL_UPDATED = '5 November 2026';
 
 const contact = SUPPORT_EMAIL
   ? `Write to us at ${SUPPORT_EMAIL}.`
@@ -20,12 +20,12 @@ export const LEGAL_DOCS: LegalDoc[] = [
     id: 'terms',
     tab: 'Terms',
     title: 'Terms and Conditions',
-    intro: 'These terms are the agreement between you and the operator of Turzam AI. By creating an account or signing in, you accept them.',
+    intro: 'These terms are the agreement between you and Turzam LLC, the operator of Turzam AI. By creating an account or signing in, you accept them.',
     sections: [
       {
         heading: '1. The service',
         body: [
-          'Turzam AI is an AI assistant for business and creative work. Answers are produced by third-party AI models (such as Google Gemini, and OpenAI or Anthropic if the operator connects them).',
+          'Turzam AI is an AI assistant for business and creative work operated by Turzam LLC. Answers are produced by third-party AI models (such as Google Gemini, and OpenAI or Anthropic if Turzam LLC connects them).',
           'We may change, limit or stop features at any time, for example to control costs or keep the service safe.',
         ],
       },
@@ -88,7 +88,7 @@ export const LEGAL_DOCS: LegalDoc[] = [
     id: 'privacy',
     tab: 'Privacy',
     title: 'Privacy Policy',
-    intro: 'This explains what Turzam AI collects, why, who it is shared with, and the choices you have.',
+    intro: 'Turzam AI is operated by Turzam LLC. This explains what Turzam AI collects, why, who it is shared with, and the choices you have.',
     sections: [
       {
         heading: '1. What we collect',
@@ -149,7 +149,7 @@ export const LEGAL_DOCS: LegalDoc[] = [
     id: 'cookies',
     tab: 'Cookies',
     title: 'Cookie Policy',
-    intro: 'Turzam AI is a mobile app. It does not use advertising or tracking cookies. This page explains what is stored on your device and where cookies can still appear.',
+    intro: 'Turzam AI, operated by Turzam LLC, is a mobile app. It does not use advertising or tracking cookies. This page explains what is stored on your device and where cookies can still appear.',
     sections: [
       {
         heading: '1. What the app stores on your device',

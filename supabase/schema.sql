@@ -303,6 +303,20 @@ $$;
 revoke all on function public.consume_quota(uuid, text, int, int, int) from public, anon, authenticated;
 grant execute on function public.consume_quota(uuid, text, int, int, int) to service_role;
 
+-- ---------- Resumable account-deletion recovery ----------
+-- A row means deletion is pending. It intentionally has no auth.users FK so it survives a failed
+-- auth deletion/cascade and can be resumed by the still-authenticated owner. It is server-only.
+create table if not exists public.account_deletion_jobs (
+  user_id uuid primary key,
+  requested_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  stage text not null default 'storage' check (stage in ('storage', 'database')),
+  last_error text
+);
+alter table public.account_deletion_jobs enable row level security;
+revoke all on public.account_deletion_jobs from public, anon, authenticated, service_role;
+grant select, insert, update, delete on public.account_deletion_jobs to service_role;
+
 
 -- ---------- Founder Admin Panel (additive; no chat content or credentials exposed) ----------
 -- Admin-only tables are never granted to anon/authenticated. Edge Functions use service_role
@@ -315,12 +329,34 @@ create table if not exists public.user_activity (
   primary key (user_id, activity_date)
 );
 create index if not exists user_activity_date_idx on public.user_activity(activity_date, last_active_at desc);
+
+-- Activity is recorded server-side from usage events; clients never write directly to this table.
+create or replace function public.record_user_activity_from_usage()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  insert into public.user_activity (user_id, activity_date, last_active_at)
+  values (new.user_id, (new.created_at at time zone 'UTC')::date, new.created_at)
+  on conflict (user_id, activity_date)
+  do update set last_active_at = greatest(public.user_activity.last_active_at, excluded.last_active_at);
+  return new;
+end;
+$$;
+drop trigger if exists usage_events_record_activity on public.usage_events;
+create trigger usage_events_record_activity
+  after insert on public.usage_events
+  for each row execute function public.record_user_activity_from_usage();
+
 alter table public.user_activity enable row level security;
-revoke all on public.user_activity from public, anon;
-grant select, insert, update on public.user_activity to authenticated;
+revoke all on public.user_activity from public, anon, authenticated, service_role;
+grant select, insert, update, delete on public.user_activity to service_role;
 drop policy if exists "activity own active" on public.user_activity;
-create policy "activity own active" on public.user_activity
-  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists "deny client access" on public.user_activity;
+create policy "deny client access" on public.user_activity
+  for all to anon, authenticated using (false) with check (false);
 
 create table if not exists public.admin_account_control (
   user_id uuid primary key references auth.users(id) on delete cascade,
@@ -712,9 +748,3 @@ as $$
 $$;
 revoke all on function public.admin_user_lookup_by_email(text) from public, anon, authenticated;
 grant execute on function public.admin_user_lookup_by_email(text) to service_role;
-
--- Activity is not sensitive, but suspended accounts must not inflate active-user counts.
-drop policy if exists "activity own active" on public.user_activity;
-create policy "activity own active" on public.user_activity
-  for all using (user_id = auth.uid() and public.current_account_is_active())
-  with check (user_id = auth.uid() and public.current_account_is_active());
