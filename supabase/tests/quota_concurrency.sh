@@ -97,13 +97,25 @@ RLS_FOLDER_B="10000000-0000-0000-0000-0000000000b1"
 RLS_CHAT="20000000-0000-0000-0000-0000000000a1"
 run -c "insert into auth.users values ('$RLS_USER_A'), ('$RLS_USER_B'); insert into public.folders values ('$RLS_FOLDER_A','$RLS_USER_A','A'), ('$RLS_FOLDER_B','$RLS_USER_B','B'); insert into public.conversations values ('$RLS_CHAT','$RLS_USER_A','$RLS_FOLDER_B',null)" >/dev/null
 
-# Apply the exact legacy conversation/folder policy block from schema.sql (first occurrence only), stopping before the messages policy.
-# The Founder Admin section later re-creates these policies; the usage-limit load below installs that final version.
+# Apply the legacy conversation/folder blocks first to test the cross-user-link backfill, then apply
+# the final helper-backed policies that match the live account-status and feature checks.
 sed -n '/^drop policy if exists "conversations own" on public.conversations;/,/^drop policy if exists "messages own" on public.messages;/{ /^drop policy if exists "messages own" on public.messages;/q; p; }' "$SCHEMA_FILE" | run >/dev/null
 sed -n '/^drop policy if exists "folders own" on public.folders;/,/^drop policy if exists "projects own" on public.projects;/{ /^drop policy if exists "projects own" on public.projects;/q; p; }' "$SCHEMA_FILE" | run >/dev/null
+awk '
+  /^drop policy if exists "conversations own" on public.conversations;/ { occurrence++; if (occurrence == 2) in_block = 1 }
+  in_block && /^drop policy if exists "messages own" on public.messages;/ { exit }
+  in_block { print }
+' "$SCHEMA_FILE" | run >/dev/null
+awk '
+  /^drop policy if exists "folders own" on public.folders;/ { occurrence++; if (occurrence == 2) in_block = 1 }
+  in_block && /^drop policy if exists "projects own" on public.projects;/ { exit }
+  in_block { print }
+' "$SCHEMA_FILE" | run >/dev/null
 
 # Load quota and recovery-table DDL, excluding the later founder-admin schema and its dependencies.
 sed -n '/^-- ---------- Usage limits/,$p' "$SCHEMA_FILE" | sed '/^-- ---------- Founder Admin Panel/,$d' | run >/dev/null
+# Apply only the founder-admin quota override, which adds admin_auth, without loading other admin DDL.
+sed -n '/^-- Extend the accepted internal quota kind/,/^-- Internal helpers:/{ /^-- Internal helpers:/d; p; }' "$SCHEMA_FILE" | run >/dev/null
 
 fail=0
 expect() { # name, expected, actual
