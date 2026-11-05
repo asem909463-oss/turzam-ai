@@ -37,6 +37,36 @@ create function auth.uid() returns uuid language sql stable as
 grant usage on schema auth to anon, authenticated;
 grant execute on function auth.uid() to anon, authenticated;
 grant usage on schema public to anon, authenticated;
+create table public.admin_account_control (
+  user_id uuid primary key references auth.users(id),
+  account_status text not null default 'active'
+);
+create table public.admin_settings (key text primary key, value jsonb not null);
+create or replace function public.current_account_is_active()
+returns boolean
+language sql stable security definer
+set search_path = pg_catalog, public, auth
+as $$
+  select auth.uid() is not null and not exists (
+    select 1 from public.admin_account_control c
+    where c.user_id = auth.uid() and c.account_status = 'suspended'
+  );
+$$;
+revoke all on function public.current_account_is_active() from public, anon;
+grant execute on function public.current_account_is_active() to authenticated, service_role;
+create or replace function public.current_feature_enabled(p_feature text)
+returns boolean
+language sql stable security definer
+set search_path = pg_catalog, public, auth
+as $$
+  select coalesce(
+    (select (s.value #>> array['features', p_feature])::boolean
+     from public.admin_settings s where s.key = 'runtime'),
+    true
+  );
+$$;
+revoke all on function public.current_feature_enabled(text) from public, anon;
+grant execute on function public.current_feature_enabled(text) to authenticated, service_role;
 create table public.folders (id uuid primary key, user_id uuid not null references auth.users(id), name text not null);
 create table public.projects (id uuid primary key, user_id uuid not null references auth.users(id));
 create table public.conversations (
@@ -72,8 +102,8 @@ run -c "insert into auth.users values ('$RLS_USER_A'), ('$RLS_USER_B'); insert i
 sed -n '/^drop policy if exists "conversations own" on public.conversations;/,/^drop policy if exists "messages own" on public.messages;/{ /^drop policy if exists "messages own" on public.messages;/q; p; }' "$SCHEMA_FILE" | run >/dev/null
 sed -n '/^drop policy if exists "folders own" on public.folders;/,/^drop policy if exists "projects own" on public.projects;/{ /^drop policy if exists "projects own" on public.projects;/q; p; }' "$SCHEMA_FILE" | run >/dev/null
 
-# Load only the usage-limit section of schema.sql.
-sed -n '/^-- ---------- Usage limits/,$p' "$SCHEMA_FILE" | run >/dev/null
+# Load quota and recovery-table DDL, excluding the later founder-admin schema and its dependencies.
+sed -n '/^-- ---------- Usage limits/,$p' "$SCHEMA_FILE" | sed '/^-- ---------- Founder Admin Panel/,$d' | run >/dev/null
 
 fail=0
 expect() { # name, expected, actual
