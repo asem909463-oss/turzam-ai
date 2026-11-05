@@ -46,7 +46,9 @@
         {
           "microphonePermission": "Turzam AI uses the microphone for voice conversations."
         }
-      ]
+      ],
+      "expo-sharing",
+      "expo-splash-screen"
     ],
     "experiments": {
       "typedRoutes": false

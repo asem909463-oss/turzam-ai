@@ -22,6 +22,7 @@ React Native + Expo + TypeScript app for iOS and Android. Supabase handles login
 - **Models:** Gemini, ChatGPT (OpenAI) and Claude (Anthropic). The app shows each one as **Connected** only when its key is set on the server. Gemini is required; the other two are optional.
 - **App reviews:** after 5 successful answers, a tasteful one-time-at-a-time prompt can open Apple’s or Google’s official in-app rating flow. Settings also includes Rate Turzam AI. The operating system decides whether to show its review sheet.
 - **Usage protection:** per-user limits on the server (see "Limits, costs and safety"), counted in the database and impossible to raise from the app.
+- **Account recovery:** email/password users can request a reset link and choose a new password in the app after verifying the recovery link.
 
 ## Where do my keys go?
 
@@ -89,7 +90,7 @@ npx supabase functions deploy founder-admin
 ```
 Added a key later? Repeat only the `secrets set` line, then reopen the app.
 
-**Founder panel setup:** create/sign in to the founder's Supabase Auth account first. In the ignored `supabase/.env`, set either `FOUNDER_USER_ID` to that account's Auth UUID (recommended) or `FOUNDER_ADMIN_EMAIL` to its verified email, plus a private `FOUNDER_ACCESS_CODE`. Keep all three out of the Expo `.env`, app source, and GitHub. Upload them using the same `secrets set --env-file` command and deploy both `chat` and `founder-admin`. In the existing chat, send the exact phrase `I AM THE FOUNDER OF TURZAM AI`, then enter the code when prompted. The challenge and code are not sent to AI or saved in chat; the code is checked server-side and the short-lived admin session is kept only in memory. There is no visible admin button. Dashboard APIs independently verify the Supabase user and admin session; a direct route is not authorization.
+**Founder panel setup:** create/sign in to the founder's Supabase Auth account first. In the ignored `supabase/.env`, set either `FOUNDER_USER_ID` to that account's Auth UUID (recommended) or `FOUNDER_ADMIN_EMAIL` to its verified email, plus a private `FOUNDER_ACCESS_CODE`. Keep all three out of the Expo `.env`, app source, and GitHub. Upload them using the same `secrets set --env-file` command and deploy both `chat` and `founder-admin`. In the existing chat, send the exact phrase `I AM THE FOUNDER OF TURZAM AI`; the app opens a dedicated secure-code screen. The code uses secure text entry, is sent directly to the server, and is never sent to AI or saved in chat. The short-lived admin session is kept only in memory. There is no visible admin button. Dashboard APIs independently verify the Supabase user and admin session; a direct route is not authorization.
 
 The panel reads real Auth/database records only. It includes user status/tier administration, activity and registration metrics, AI usage/errors, server-enforced feature/model/maintenance switches, audited actions, and in-app announcements. It does not read conversations or expose credentials. Revenue and paid-subscription metrics remain unavailable until a billing provider is actually integrated; premium access changes here are entitlements, not payment transactions. Daily active-user reporting starts accruing real heartbeats after this app version is deployed; no historical activity is fabricated.
 
@@ -221,7 +222,7 @@ People who sign in with Google or Apple have no Turzam password, so **Delete acc
 - Per-user quotas do not stop someone creating many accounts. Set `GLOBAL_CHAT_PER_DAY` (and the SEARCH / TRANSCRIBE ones) in `supabase/.env` as a total daily cap, turn on **Confirm email** in Supabase (Authentication, Providers, Email), and enable CAPTCHA under Authentication, Attack Protection before a public launch.
 - Account deletion removes your data in this app's Supabase project. It does not delete anything already sent to Google, OpenAI or Anthropic (see their own policies).
 - Web-search sources come as Google redirect links; they open the real page.
-- This app build has no in-app subscription or checkout integration; Settings shows the connected AI providers and makes that limitation clear instead of implying a paid plan.
+- Subscriptions are not available yet and are coming soon; this app build has no in-app subscription or checkout integration. Settings makes that limitation clear instead of implying a paid plan.
 - Voice replies use the phone's voice for the language chosen in Settings; the app cannot detect the answer's language.
 - Deleting an account that signed in with Apple does not yet revoke the Apple token (Apple asks for this before App Store approval).
 - In-app toasts are included; push notifications are not.

@@ -156,6 +156,8 @@ expect "denied direct calls cannot write usage records" "$before" "$after"
 echo "-- account deletion recovery state survives failures but stays server-only"
 deletion_privileges=$(run -c "select concat(has_table_privilege('service_role','public.account_deletion_jobs','SELECT'),'|',has_table_privilege('service_role','public.account_deletion_jobs','INSERT'),'|',has_table_privilege('service_role','public.account_deletion_jobs','UPDATE'),'|',has_table_privilege('service_role','public.account_deletion_jobs','DELETE'),'|',has_table_privilege('authenticated','public.account_deletion_jobs','SELECT'),'|',has_table_privilege('authenticated','public.account_deletion_jobs','INSERT'),'|',has_table_privilege('anon','public.account_deletion_jobs','SELECT'),'|',has_table_privilege('anon','public.account_deletion_jobs','INSERT'))")
 expect "only trusted server role has recovery-table access" "t|t|t|t|f|f|f|f" "$deletion_privileges"
+deny_policy=$(run -c "select count(*) from pg_policies where schemaname='public' and tablename='account_deletion_jobs' and policyname='deny client access' and cmd='ALL' and roles @> array['anon'::name,'authenticated'::name] and qual='false' and with_check='false'")
+expect "account deletion retry state has explicit deny-only client RLS" "1" "$deny_policy"
 for role in anon authenticated; do
   if run -c "set role $role; select count(*) from public.account_deletion_jobs" >/dev/null 2>&1; then
     echo "FAIL  $role cannot read deletion recovery state (query unexpectedly succeeded)"

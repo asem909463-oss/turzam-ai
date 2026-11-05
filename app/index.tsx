@@ -76,7 +76,7 @@ export default function ChatScreen() {
       setAnswer({ text, nonce: Date.now() });
       recordSuccessfulAnswer().then((eligible) => { if (eligible) setReviewOpen(true); }).catch(() => {});
     },
-    onFounderAccess: () => router.push('/founder-admin'),
+    onFounderChallenge: () => router.push('/founder-admin-login'),
   });
   const { providers, caps, error: providersError, refresh: refreshProviders } = useProviders();
   const [voiceOpen, setVoiceOpen] = useState(false);

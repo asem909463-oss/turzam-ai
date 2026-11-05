@@ -56,7 +56,9 @@ function Gate() {
         </Stack.Protected>
         <Stack.Protected guard={signedIn}>
           <Stack.Screen name="index" options={{ animation: 'fade' }} />
+          <Stack.Screen name="founder-admin-login" options={{ animation: 'fade' }} />
           <Stack.Screen name="settings" />
+          <Stack.Screen name="reset-password" options={{ animation: 'fade' }} />
           <Stack.Screen name="memory" />
           <Stack.Screen name="projects" />
           <Stack.Screen name="project" />

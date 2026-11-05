@@ -316,6 +316,9 @@ create table if not exists public.account_deletion_jobs (
 alter table public.account_deletion_jobs enable row level security;
 revoke all on public.account_deletion_jobs from public, anon, authenticated, service_role;
 grant select, insert, update, delete on public.account_deletion_jobs to service_role;
+drop policy if exists "deny client access" on public.account_deletion_jobs;
+create policy "deny client access" on public.account_deletion_jobs
+  for all to anon, authenticated using (false) with check (false);
 
 
 -- ---------- Founder Admin Panel (additive; no chat content or credentials exposed) ----------

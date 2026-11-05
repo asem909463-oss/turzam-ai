@@ -3,6 +3,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Aurora } from '../src/components/Aurora';
 import { GradientButton } from '../src/components/GradientButton';
+import { useAuth } from '../src/context/AuthContext';
 import { useStyles, useTheme } from '../src/context/ThemeContext';
 import { supabase } from '../src/lib/supabase';
 import { fonts, Theme } from '../src/theme';
@@ -12,14 +13,17 @@ import { fonts, Theme } from '../src/theme';
  * It swaps the one-time code for a session, then the app moves on by itself.
  */
 export default function AuthCallback() {
-  const params = useLocalSearchParams<{ code?: string; error?: string; error_description?: string }>();
+  const params = useLocalSearchParams<{ code?: string; type?: string; error?: string; error_description?: string }>();
   const router = useRouter();
   const styles = useStyles(make);
   const { colors } = useTheme();
+  const { session } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const [exchanged, setExchanged] = useState(false);
   const started = useRef(false);
 
   const code = typeof params.code === 'string' ? params.code : '';
+  const recovery = params.type === 'recovery';
   const providerError =
     (typeof params.error_description === 'string' && params.error_description) || (typeof params.error === 'string' && params.error) || '';
 
@@ -36,10 +40,14 @@ export default function AuthCallback() {
       .exchangeCodeForSession(code)
       .then(({ error: e }) => {
         if (e) setError(e.message);
-        else router.replace('/');
+        else setExchanged(true);
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Could not finish signing in.'));
-  }, [code, providerError, router]);
+  }, [code, providerError, recovery, router]);
+
+  useEffect(() => {
+    if (exchanged && session) router.replace(recovery ? '/reset-password' : '/');
+  }, [exchanged, recovery, router, session]);
 
   return (
     <View style={styles.root}>

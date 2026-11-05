@@ -16,6 +16,15 @@ jobs:
           node-version: 22
       - name: Install packages
         run: npm ci
+      - name: Check Expo SDK package compatibility
+        run: npx expo install --check
+      - name: Validate iOS and Android native configuration
+        run: npx expo prebuild --platform all --no-install
+      - name: Bundle iOS and Android app code
+        run: |
+          npx expo export --platform ios --output-dir /tmp/turzam-export-ios
+          npx expo export --platform android --output-dir /tmp/turzam-export-android
+          rm -rf ios android
       - name: Type-check the app
         run: npm run typecheck
       - name: Dependencies pinned and lockfile present

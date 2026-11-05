@@ -245,7 +245,7 @@ export default function Settings() {
             <View style={[styles.statusDot, { backgroundColor: connected.length ? colors.success : providers === null ? colors.accent : colors.textFaint }]} />
             <Text style={styles.accessStatusText}>{providers === null ? (providersError ? 'Could not check access' : 'Checking provider access') : connected.length ? 'Provider access is ready' : 'Waiting for a provider connection'}</Text>
           </View>
-          <Text style={styles.accessNote}>Subscriptions and in-app checkout aren’t configured in this build. Provider keys stay server-side; nothing here asks you to pay.</Text>
+          <Text style={styles.accessNote}>Subscriptions aren’t available yet; they’re coming soon. In-app checkout isn’t configured in this build. Provider keys stay server-side, and nothing here asks you to pay.</Text>
           <View style={styles.divider} />
           <View style={styles.switchRow}>
             <View style={{ flex: 1 }}>

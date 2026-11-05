@@ -15,6 +15,8 @@ type AuthState = {
   profileLoading: boolean;
   profileError: string | null;
   signIn: (email: string, password: string) => Promise<string | null>;
+  requestPasswordReset: (email: string) => Promise<string | null>;
+  updatePassword: (password: string) => Promise<string | null>;
   /** Returns { error } or { needsConfirm: true } when the email must be confirmed first. */
   signUp: (email: string, password: string) => Promise<{ error?: string; needsConfirm?: boolean }>;
   /** Opens Google or Apple sign-in in the browser. Returns an error message, or null when the browser was opened. */
@@ -107,6 +109,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return error ? error.message : null;
   }, []);
 
+  const requestPasswordReset = useCallback(async (email: string) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: Linking.createURL('auth-callback', { queryParams: { type: 'recovery' } }),
+    });
+    return error ? error.message : null;
+  }, []);
+
+  const updatePassword = useCallback(async (password: string) => {
+    const { error } = await supabase.auth.updateUser({ password });
+    return error ? error.message : null;
+  }, []);
+
   const signUp = useCallback(async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
     if (error) return { error: error.message };
@@ -164,12 +178,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profileLoading,
       profileError,
       signIn,
+      requestPasswordReset,
+      updatePassword,
       signUp,
       signInWithProvider,
       signOut,
       updateProfile,
     }),
-    [session, profile, loading, profileLoading, profileError, signIn, signUp, signInWithProvider, signOut, updateProfile],
+    [session, profile, loading, profileLoading, profileError, signIn, requestPasswordReset, updatePassword, signUp, signInWithProvider, signOut, updateProfile],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

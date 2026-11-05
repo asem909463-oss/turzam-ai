@@ -16,12 +16,13 @@ import { useStyles, useTheme } from '../src/context/ThemeContext';
 import { fonts, radius, Theme, withAlpha } from '../src/theme';
 
 export default function AuthScreen() {
-  const { signIn, signUp, signInWithProvider } = useAuth();
+  const { signIn, signUp, signInWithProvider, requestPasswordReset } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const styles = useStyles(make);
   const [isSignUp, setIsSignUp] = useState(false);
+  const [resetMode, setResetMode] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -60,10 +61,14 @@ export default function AuthScreen() {
     setError(null);
     setInfo(null);
     if (!/^\S+@\S+\.\S+$/.test(email.trim())) return fail('Enter a valid email address.');
-    if (password.length < 6) return fail('Your password needs at least 6 characters.');
+    if (!resetMode && password.length < 6) return fail('Your password needs at least 6 characters.');
     setBusy(true);
     try {
-      if (isSignUp) {
+      if (resetMode) {
+        const err = await requestPasswordReset(email);
+        if (err) fail(err);
+        else setInfo('If an account exists for this email, a password reset link is on its way.');
+      } else if (isSignUp) {
         const res = await signUp(email, password);
         if (res.error) fail(res.error);
         else if (res.needsConfirm) {
@@ -99,7 +104,7 @@ export default function AuthScreen() {
           </Animated.View>
 
           <Animated.View entering={FadeInDown.delay(340).duration(500)} style={[styles.card, shakeStyle]}>
-            <Text style={styles.cardTitle}>{isSignUp ? 'Create your account' : 'Welcome back'}</Text>
+            <Text style={styles.cardTitle}>{resetMode ? 'Reset your password' : isSignUp ? 'Create your account' : 'Welcome back'}</Text>
             <Field
               icon="mail-outline"
               placeholder="Email"
@@ -110,7 +115,7 @@ export default function AuthScreen() {
               value={email}
               onChangeText={setEmail}
             />
-            <Field
+            {!resetMode ? <Field
               icon="lock-closed-outline"
               placeholder="Password"
               secureToggle
@@ -119,7 +124,7 @@ export default function AuthScreen() {
               value={password}
               onChangeText={setPassword}
               onSubmitEditing={submit}
-            />
+            /> : null}
             {error ? (
               <Animated.Text entering={FadeInDown.duration(200)} style={styles.error}>
                 {error}
@@ -130,14 +135,24 @@ export default function AuthScreen() {
                 {info}
               </Animated.Text>
             ) : null}
-            <GradientButton title={isSignUp ? 'Create account' : 'Sign in'} onPress={submit} loading={busy} />
+            <GradientButton title={resetMode ? 'Send reset link' : isSignUp ? 'Create account' : 'Sign in'} onPress={submit} loading={busy} />
 
-            <View style={styles.orRow}>
+            {!isSignUp && !resetMode ? (
+              <PressableScale
+                onPress={() => { setResetMode(true); setError(null); setInfo(null); }}
+                style={{ alignSelf: 'flex-end', paddingVertical: 2 }}
+                label="Reset your password"
+              >
+                <Text style={styles.consentLink}>Forgot password?</Text>
+              </PressableScale>
+            ) : null}
+
+            {!resetMode ? <View style={styles.orRow}>
               <View style={styles.orLine} />
               <Text style={styles.orText}>or</Text>
               <View style={styles.orLine} />
-            </View>
-            <PressableScale
+            </View> : null}
+            {!resetMode ? <PressableScale
               onPress={() => social('google')}
               disabled={busy || socialBusy !== null}
               style={styles.socialBtn}
@@ -145,8 +160,8 @@ export default function AuthScreen() {
             >
               <Ionicons name="logo-google" size={19} color={colors.text} />
               <Text style={styles.socialText}>{socialBusy === 'google' ? 'Opening Google…' : 'Continue with Google'}</Text>
-            </PressableScale>
-            <PressableScale
+            </PressableScale> : null}
+            {!resetMode ? <PressableScale
               onPress={() => social('apple')}
               disabled={busy || socialBusy !== null}
               style={styles.socialBtn}
@@ -154,9 +169,9 @@ export default function AuthScreen() {
             >
               <Ionicons name="logo-apple" size={21} color={colors.text} />
               <Text style={styles.socialText}>{socialBusy === 'apple' ? 'Opening Apple…' : 'Continue with Apple'}</Text>
-            </PressableScale>
+            </PressableScale> : null}
 
-            <Text style={styles.consent}>
+            {!resetMode ? <Text style={styles.consent}>
               By continuing you agree to our{' '}
               <Text style={styles.consentLink} onPress={() => router.push({ pathname: '/legal', params: { doc: 'terms' } })}>
                 Terms
@@ -170,13 +185,16 @@ export default function AuthScreen() {
                 Cookie Policy
               </Text>
               .
-            </Text>
+            </Text> : null}
           </Animated.View>
 
           <Animated.View entering={FadeInDown.delay(440).duration(500)}>
             <PressableScale
               onPress={() => {
-                setIsSignUp((v) => !v);
+                if (resetMode) {
+                  setResetMode(false);
+                  setIsSignUp(false);
+                } else setIsSignUp((v) => !v);
                 setError(null);
                 setInfo(null);
               }}
@@ -184,8 +202,8 @@ export default function AuthScreen() {
               label="Switch between sign in and sign up"
             >
               <Text style={styles.switchText}>
-                {isSignUp ? 'Already have an account? ' : 'New to Turzam? '}
-                <Text style={{ color: colors.accentInk, fontFamily: fonts.uiBold }}>{isSignUp ? 'Sign in' : 'Create an account'}</Text>
+                {resetMode ? 'Remembered it? ' : isSignUp ? 'Already have an account? ' : 'New to Turzam? '}
+                <Text style={{ color: colors.accentInk, fontFamily: fonts.uiBold }}>{resetMode ? 'Back to sign in' : isSignUp ? 'Sign in' : 'Create an account'}</Text>
               </Text>
             </PressableScale>
           </Animated.View>

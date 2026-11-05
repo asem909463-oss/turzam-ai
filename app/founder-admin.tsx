@@ -486,7 +486,7 @@ export default function FounderAdminScreen() {
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Membership and billing</Text>
               <View style={styles.row}><View style={[styles.badge, styles.badgeDanger]}><Text style={[styles.badgeText, styles.badgeDangerText]}>Billing not connected</Text></View></View>
-              <Text style={styles.body}>Premium access is an admin-managed entitlement in this app. No payment provider or subscription ledger is configured, so active paid subscriptions and revenue are unavailable; no revenue estimate is shown.</Text>
+              <Text style={styles.body}>Subscriptions are not available yet and are coming soon. Premium access is an admin-managed entitlement in this app; no payment provider or subscription ledger is configured, so paid subscriptions and revenue are unavailable.</Text>
             </View>
           </>
         ) : null}
@@ -608,7 +608,7 @@ export default function FounderAdminScreen() {
               </PressableScale>
             </View>
 
-            <View style={styles.noticeBox}><Text style={styles.body}>Premium access can be granted per account from Users. This app has no payment provider or subscription ledger, so premium access is not a payment record and revenue is unavailable.</Text></View>
+            <View style={styles.noticeBox}><Text style={styles.body}>Subscriptions are not available yet and are coming soon. Premium access can be granted per account from Users, but it is not a payment record; checkout, subscription status and revenue are not yet connected.</Text></View>
           </>
         ) : null}
 
