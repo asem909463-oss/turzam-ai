@@ -23,7 +23,14 @@ do $$ begin
   if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
 end $$;
 create schema auth;
-create table auth.users (id uuid primary key);
+create table auth.users (
+  id uuid primary key,
+  email text,
+  raw_user_meta_data jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  last_sign_in_at timestamptz,
+  banned_until timestamptz
+);
 create function auth.uid() returns uuid language sql stable as
   $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 grant usage on schema auth to anon, authenticated;
@@ -37,6 +44,14 @@ create table public.conversations (
   folder_id uuid references public.folders(id),
   project_id uuid references public.projects(id)
 );
+-- Stand-ins for tables/objects the Founder Admin section of schema.sql also touches.
+create table public.profiles (id uuid primary key references auth.users(id), display_name text);
+create table public.messages (id uuid primary key, user_id uuid not null references auth.users(id), conversation_id uuid references public.conversations(id));
+create table public.memories (id uuid primary key, user_id uuid not null references auth.users(id));
+create table public.project_files (id uuid primary key, user_id uuid not null references auth.users(id), project_id uuid references public.projects(id));
+create schema storage;
+create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);
+create function storage.foldername(name text) returns text[] language sql immutable as $$ select string_to_array(name, '/') $$;
 alter table public.folders enable row level security;
 alter table public.conversations enable row level security;
 grant select, insert, update, delete on public.folders, public.conversations to authenticated;
@@ -51,9 +66,10 @@ RLS_FOLDER_B="10000000-0000-0000-0000-0000000000b1"
 RLS_CHAT="20000000-0000-0000-0000-0000000000a1"
 run -c "insert into auth.users values ('$RLS_USER_A'), ('$RLS_USER_B'); insert into public.folders values ('$RLS_FOLDER_A','$RLS_USER_A','A'), ('$RLS_FOLDER_B','$RLS_USER_B','B'); insert into public.conversations values ('$RLS_CHAT','$RLS_USER_A','$RLS_FOLDER_B',null)" >/dev/null
 
-# Apply the exact conversation/folder policy block from schema.sql, stopping before the messages policy.
-sed -n '/^drop policy if exists "conversations own" on public.conversations;/,/^drop policy if exists "messages own" on public.messages;/{ /^drop policy if exists "messages own" on public.messages;/d; p; }' "$SCHEMA_FILE" | run >/dev/null
-sed -n '/^drop policy if exists "folders own" on public.folders;/,/^drop policy if exists "projects own" on public.projects;/{ /^drop policy if exists "projects own" on public.projects;/d; p; }' "$SCHEMA_FILE" | run >/dev/null
+# Apply the exact legacy conversation/folder policy block from schema.sql (first occurrence only), stopping before the messages policy.
+# The Founder Admin section later re-creates these policies; the usage-limit load below installs that final version.
+sed -n '/^drop policy if exists "conversations own" on public.conversations;/,/^drop policy if exists "messages own" on public.messages;/{ /^drop policy if exists "messages own" on public.messages;/q; p; }' "$SCHEMA_FILE" | run >/dev/null
+sed -n '/^drop policy if exists "folders own" on public.folders;/,/^drop policy if exists "projects own" on public.projects;/{ /^drop policy if exists "projects own" on public.projects;/q; p; }' "$SCHEMA_FILE" | run >/dev/null
 
 # Load only the usage-limit section of schema.sql.
 sed -n '/^-- ---------- Usage limits/,$p' "$SCHEMA_FILE" | run >/dev/null
@@ -136,5 +152,12 @@ run -c "truncate public.usage_events" >/dev/null
 run >/dev/null -c "insert into auth.users values ('00000000-0000-0000-0000-0000000000aa') on conflict do nothing"
 r=$(run -c "set role service_role; select (public.consume_quota('00000000-0000-0000-0000-0000000000aa','chat',10,100,1)->>'ok'), (public.consume_quota('00000000-0000-0000-0000-0000000000aa','chat',10,100,1)->>'ok'), (public.consume_quota('00000000-0000-0000-0000-0000000000aa','aux',10,100,1)->>'ok')" | tail -1)
 expect "chat capped at 1 but aux still allowed" "true|false|true" "$r"
+
+echo "-- founder-admin sign-in attempts are rate-limited (admin_auth) and unknown kinds are rejected"
+run -c "truncate public.usage_events" >/dev/null
+r=$(run -c "set role service_role; select string_agg(coalesce(public.consume_quota('00000000-0000-0000-0000-0000000000aa','admin_auth',5,20,null)->>'ok','null'), ',') from generate_series(1,7)" | tail -1)
+expect "admin_auth allows 5 attempts per minute, then blocks" "true,true,true,true,true,false,false" "$r"
+r=$(run -c "set role service_role; select public.consume_quota('00000000-0000-0000-0000-0000000000aa','not_a_kind',5,20,null)->>'reason'" | tail -1)
+expect "unknown quota kind is rejected" "kind" "$r"
 
 [ "$fail" = 0 ] && echo "ALL PASSED" || { echo "SOME FAILED"; exit 1; }

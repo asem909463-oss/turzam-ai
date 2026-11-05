@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { usePrefs } from '../context/ThemeContext';
 import { fileKind, purgeConversationFiles, removeStoredFiles, uploadAttachments } from '../lib/attachments';
 import { supabase } from '../lib/supabase';
+import { authenticateFounder } from '../lib/founder-admin';
 import { ApiMessage, callFunction, streamChat } from '../lib/stream';
 import { uuid } from '../lib/utils';
 import type { MessageHit } from '../components/HistoryDrawer';
@@ -38,16 +39,21 @@ function toApi(m: ChatMessage): ApiMessage {
 }
 
 function usable(m: ChatMessage): boolean {
-  return !m.error && (!!m.content || !!m.attachments?.length);
+  return !m.ephemeral && !m.error && (!!m.content || !!m.attachments?.length);
 }
 
-export function useChat(opts?: { onAnswer?: (text: string) => void }) {
+export function useChat(opts?: { onAnswer?: (text: string) => void; onFounderAccess?: () => void }) {
   const { profile } = useAuth();
   const { prefs } = usePrefs();
   const onAnswerRef = useRef(opts?.onAnswer);
+  const onFounderAccessRef = useRef(opts?.onFounderAccess);
+  const founderChallengeUntilRef = useRef(0);
   useEffect(() => {
     onAnswerRef.current = opts?.onAnswer;
   }, [opts?.onAnswer]);
+  useEffect(() => {
+    onFounderAccessRef.current = opts?.onFounderAccess;
+  }, [opts?.onFounderAccess]);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [listLoading, setListLoading] = useState(true);
@@ -386,6 +392,41 @@ export function useChat(opts?: { onAnswer?: (text: string) => void }) {
     async (text: string, files: PickedFile[]) => {
       const trimmed = text.trim();
       if (busy || (!trimmed && !files.length)) return;
+
+      // The challenge is deliberately local and transient: neither the phrase nor the code is
+      // written to Supabase, added to model history, or sent to the normal chat Edge Function.
+      if (text === 'I AM THE FOUNDER OF TURZAM AI' && !files.length) {
+        founderChallengeUntilRef.current = Date.now() + 5 * 60 * 1000;
+        setSuggestions([]);
+        setMessages((prev) => [
+          ...prev,
+          { id: uuid(), role: 'user', content: text, ephemeral: true },
+          { id: uuid(), role: 'model', content: 'Prove it.', ephemeral: true },
+        ]);
+        return;
+      }
+
+      if (founderChallengeUntilRef.current > 0) {
+        const expiresAt = founderChallengeUntilRef.current;
+        founderChallengeUntilRef.current = 0;
+        setBusy(true);
+        setSuggestions([]);
+        const maskedInput: ChatMessage = { id: uuid(), role: 'user', content: '••••••', ephemeral: true };
+        setMessages((prev) => [...prev, maskedInput]);
+        try {
+          if (Date.now() > expiresAt) throw new Error('Verification expired. Send the founder phrase again.');
+          if (files.length) throw new Error('Enter only the verification code.');
+          await authenticateFounder(text);
+          onFounderAccessRef.current?.();
+        } catch (e) {
+          const message = e instanceof Error ? e.message : 'Unable to verify founder access.';
+          setMessages((prev) => [...prev, { id: uuid(), role: 'model', content: message, ephemeral: true }]);
+        } finally {
+          setBusy(false);
+        }
+        return;
+      }
+
       setBusy(true);
       setSuggestions([]);
 
