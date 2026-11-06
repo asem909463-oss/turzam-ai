@@ -16,6 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.turzam.ai",
+      "buildNumber": "2",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Turzam AI uses the microphone for voice conversations."
       }
