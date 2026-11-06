@@ -1,0 +1,39 @@
+workflows:
+  turzam-ai-ios:
+    name: Turzam AI iOS
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    integrations:
+      app_store_connect: turzam_app_store_connect
+
+    environment:
+      node: 20
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.turzam.ai
+
+    scripts:
+      - name: Install dependencies
+        script: npm ci
+
+      - name: Generate iOS project
+        script: npx expo prebuild --platform ios --non-interactive
+
+      - name: Apply signing
+        script: xcode-project use-profiles
+
+      - name: Build IPA
+        script: |
+          set -e
+          WORKSPACE=$(find ios -maxdepth 2 -name '*.xcworkspace' -print -quit)
+          xcode-project build-ipa --workspace "$WORKSPACE"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
