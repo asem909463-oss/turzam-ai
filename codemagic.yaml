@@ -8,6 +8,8 @@ workflows:
       app_store_connect: "uzlife codemagic"
 
     environment:
+      groups:
+        - turzam_ai
       node: 20
       ios_signing:
         distribution_type: app_store
